@@ -1,13 +1,17 @@
-    SECTION amc,CODE
+   SECTION amc,CODE
     JUMPPTR init
-    INCDIR  ""
+    INCDIR  "git/"
     INCLUDE "hwdefs.i"
+    INCDIR  "Include/"
+    INCLUDE "exec/exec_lib.i"
+    INCLUDE "exec/nodes.i"
 ;-----macro defs-----------
 ;DEBUG       SET 1
 
 ;-----screen defs----------
 width       equ 320             ; plane width
 height      equ 200             ; plane height (NTSC)
+size        equ width*height    ; plane size (bits)
 bplwidth    equ width/8         ; width in bytes
 bplsize     equ bplwidth*height ; size in bytes
 bplsizel    equ bplsize/4       ; size in dwords
@@ -16,9 +20,9 @@ bplwidthl   equ bplwidth/4      ; width in dwords
 
 ;-----state defs-----------
 ncells      equ 32              ; cell count
-csize       equ 8               ; cell size (bits)
 csizelog    equ 3               ; log2(csize)
-csizeb      equ 1               ; cell size (bytes)
+csize       equ (1<<csizelog)   ; cell size (bits)
+csizeb      equ (csize/8)       ; cell size (bytes)
 nstates     equ height/csize    ; number of states
 stwidth     equ ncells*csizeb   ; state size in bytes
 stlast      equ stwidth-1       ; last state offset
@@ -28,6 +32,10 @@ stsize      equ stwidth*nstates ; total state size
 stsizel     equ stsize/4        ; total state size in dwords
 wsize       equ 8               ; window size (rows)
 ncols       equ 4               ; number of columns for metrics
+
+;-----flag bits------------
+F_DRAW      equ 0               ; render next vblank
+M_DRAW      equ (1<<F_DRAW)     
 
 ;-----buffer defs----------
 bsize       equ stwidth*csize   ; render buffer size
@@ -39,12 +47,13 @@ coffw       equ (bplwidthw-stwidthw)/2  ; offset of cell display in words
 ; one tick = 1.396825ms (clock interval is 279.365 nanoseconds)
 ; .715909 Mhz NTSC; .709379 Mhz PAL
 ; PAL 7093,79 ~ 7094 = 10ms   | NTSC 7159,09 ~ 7159 = 10ms
-period      equ 12000
-clkmask     equ $1F
+; 120 bpm = 32dq/s ~ 22371 (NTSC)
+; 60hz ~ 11934 (NTSC)
+period      equ 14800
 
 ;-----macro functions------
 ; waitr, waitblt, setblt
-    INCDIR  ""
+    INCDIR  "git/"
     INCLUDE "wmacro.i"
 
 ;-----entry point----------
@@ -121,7 +130,8 @@ init:
     move.w  #30,rule
     lea     state,a0
     move.b  #1,16(a0)
-    move.w  #0,pos
+    move.l  #0,copypos
+    move.l  #width,bplpos
 
 ;-----setup copper list----
     move.l  #bgpl,d0            ; set up bg pointer
@@ -132,17 +142,16 @@ init:
     move.l  #copstart,_COP1LCH 
     ENDC
 
-;-----system setup---------
-    waitr   a1,d0,d1,d2
-    IFND DEBUG
-    move.w  #$7fff,_INTENA      ; disable all bits in INTENA
-    move.w  #$3070,_INTREQ      ; clear pending lvl3,6 
-    move.l  $78.w,d0            ; save lvl2 handler
-    move.l  d0,savelvl2       
+;-----install ints---------
     move.l  $6C.w,d0            ; save lvl3 handler
-    move.l  d0,savelvl3       
-    move.l  #intlvl2,$78.w      ; install lvl2 handler (cia-a)
-    move.l  #intlvl3,$6C.w      ; install lvl3 handler (copper)
+    move.l  d0,savelvl3
+    move.l  $78.w,d0            ; save lvl6 handler
+    move.l  d0,savelvl6
+
+;-----system setup---------
+    IFND DEBUG
+    waitr   a1,d0,d1,d2
+    move.w  #$7fff,_INTENA      ; disable all bits in INTENA
     move.l  #CIAB,a6            ; CIA-A base
     move.b  CIACRB(a6),d0
     and.b   #$C0,d0             ; continuous, pulse, PB6OFF
@@ -150,12 +159,16 @@ init:
     move.b  #$7F,CIAICR(a6)     ; clear CIA-A interrupts
     move.b  #(period&$FF),CIATBLO(a6) ; set timer period
     move.b  #(period>>8),CIATBHI(a6) 
-    move.w  #$E020,_INTENA      ; enable lvl2-3
-    move.b  #$82,CIAICR(a6)     ; enable TB interrupt
-    bset.b  #0,CIACRB(a6)       ; start timer
+    move.w  #$2070,_INTREQ      ; clear pending lvl3/6 
+    move.w  #$2070,_INTREQ      ; ... twice
     move.w  #$7FFF,_DMACON
     move.w  #DMAF_ALL,_DMACON
     move.w  _COPJMP1,d0         ; start copper
+    move.l  #coperint,$6C.w     ; install lvl3 handler
+    move.l  #timerint,$78.w     ; install lvl6 handler (cia-a)
+    move.w  #$E020,_INTENA      ; enable lvl3/6
+    move.b  #$82,CIAICR(a6)     ; enable TB interrupt
+    bset.b  #0,CIACRB(a6)       ; start timer
     ENDC
 
 ;-----frame loop start-------
@@ -189,12 +202,13 @@ init:
     move.w  d3,_DMACON
     or.w    #$8000,d4
     move.w  #$7FFF,_INTENA 
-    move.l  savelvl2,d0         ; restore lvl2 handler
-    move.l  d0,$78.w
     move.l  savelvl3,d0         ; restore lvl3 handler
     move.l  d0,$6C.w
+    move.l  savelvl6,d0         ; restore lvl6 handler
+    move.l  d0,$78.w
     move.w  d4,_INTENA
     or.w    #$8000,d5
+    move.w  #$7FFF,_INTREQ
     move.w  #$7FFF,_INTREQ
     move.w  d5,_INTREQ
     or.w    #$8000,d6
@@ -215,73 +229,124 @@ init:
     jsr     -132(a6)            ; permit MT
     ENDC
     movem.l (sp)+,d1-d7/a0-a6
-;   clr.l   d0
-    move.l  ctr,d0
+    move.l  ctr,d0              ; DEBUG
+    move.l  ctr2,d1
+    move.l  ctr3,d2
+    move.w  pos,d3
     rts
 
 ;------interrupts----------
 
-; Software lvl3 handler
-intlvl3:
-    movem.l d0-d1,-(sp)
+coperint:
+    movem.l d1-d6/a0-a2,-(sp)
     move.w  _INTREQR,d0         ; check req mask
-    btst    #5,d0               ; VERTB handler
+    btst    #5,d0               ; VBLANK handler
     beq     .exit
-    move.w  clk,d0
-    and.w   #clkmask,d0
-    move.w  clk,d0
-    addq    #1,d0
-    and.w   #clkmask,d0
-    move.w  d0,clk
+    btst    #F_DRAW,flags
+    beq     .nodraw
+    bclr    #F_DRAW,flags
+    move.l  coprpos,d5          ; get copper offset
+    move.l  #bgpl,d6
+    addmod  d5,width,bplsize    ; update start
+    move.l  d5,coprpos
+    add.l   d5,d6               ; copper start
+    move.w  d6,copptrl          ; update copper
+    swap    d6
+    move.w  d6,copptrh
+    lea     bgpl,a1             ; screen base for copy
+    move.l  copypos,d4          ; offset for copy
+    move.l  d4,d5
+    add.l   #coff,d5
+    add.l   d5,a1               ; copy address
+    addmod  d4,width,bplsize    ; increment
+    move.l  d4,copypos
+    lea     cbuf,a0             ; source address
+    bsr     copystate
+.nocopy: 
+    move.w  drawpos,d0          ; state position
+    bsr     drawstate           ; copy state
+    lea     bgplhi,a1           ; screen base for render
+    move.l  bplpos,d4           ; offset for render
+    move.l  d4,d5
+    add.l   #coff,d5
+    add.l   d5,a1               ; render address
+    addmod  d4,width,bplsize    ; increment
+    move.l  d4,bplpos
+    lea     cbuf,a0             ; source address
+    bsr     copystate           ; render new state
+.nodraw:
+    move.w  #$4020,_INTREQ      ; clear INTREQ
+    move.w  #$4020,_INTREQ      ; ... twice
 .exit:
-    movem.l (sp)+,d0-d1
+    movem.l (sp)+,d1-d6/a0-a2
+    nop
     rte
 
-intlvl2:
-    movem.l d0-d6/a0-a2,-(sp)
+timerint:
+    movem.l d1-d6/a0-a2,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #13,d0              ; PORTS handler
     beq     .exit
     move.l  #CIAB,a0            ; CIA-B base
-    move.b  CIAICR(a0),d0       ; poll CIA mask
-    btst    #1,d0
+    btst    #1,CIAICR(a0)
     beq     .exit
-    move.l  ctr,d0
+    move.b  cpos,d0             ; increment mod position
     addq    #1,d0
-    move.l  d0,ctr
-    jsr     nextstate           ; compute next state
-    move.w  pos,d6
-    jsr     drawstate
-    jsr     copystate
+    cmp.b   #(csize/2),d0       ; if halfway, request render
+    bne.b   .nodraw
+    bset    #F_DRAW,flags       ; set draw bit
+    move.w  pos,drawpos         ; set draw position
+    move.w  #$6000,_INTREQ      ; clear INTREQ
+    move.w  #$6000,_INTREQ      ; ... twice
+.nodraw
+    and.b   #(csize-1),d0       ; mod and test 0
+    move.b  d0,cpos
+    cmp.b   #0,d0
+    bne.b   .exit
+    add.l   #1,ctr              ; DEBUG
+    jsr     nextstate
 .exit:
-    movem.l (sp)+,d0-d6/a0-a2
+    movem.l (sp)+,d1-d6/a0-a2
+    nop
     rte
 
 ;------locals--------------
     EVEN
-vpos:
-    dc.l    0                   ; scroll position for bitplanes
+pos:
+    dc.w    0                   ; state position
+drawpos:
+    dc.w    0                   ; render positon
+copypos:
+    dc.l    0                   ; bitplane offset for copy
+bplpos:
+    dc.l    0                   ; bitplane offset for render
+coprpos:
+    dc.l    0                   ; copper offset  
+flags:
+    dc.w    0
 rule:
     dc.w    0                   ; automata rule
 negate:
     dc.w    0                   ; 1 to flip states
-pos:
-    dc.w    0                   ; state position
-clk:
-    dc.w    0
 oncount:
     ds.b    4                   ; count of set bits by column
 xoncount:
     ds.b    4                   ; count of changes by column
 ctr:
     dc.l    0
+ctr2:
+    dc.l    0
+ctr3:
+    dc.l    0
+cpos:
+    dc.b    0                   ; scroll position mod 8
 
 ;------saves/system--------
     EVEN
-savelvl2:
-    dc.l    0                   ; saved lvl2 handler
 savelvl3:
     dc.l    0                   ; saved lvl3 handler
+savelvl6:
+    dc.l    0                   ; saved lvl6 handler
 gfxbase:
     dc.l    0
 gfxname:
@@ -290,9 +355,7 @@ gfxname:
 ;-----cell state-----------
     SECTION amd,DATA
     CNOP    0,4
-state: 
-    ds.b    stsize          ; state history
-statehi:
+state:
     ds.b    stsize
 
 ;-----copper lists---------
@@ -313,18 +376,20 @@ coplist:
 ;-----bitplanes------------
     SECTION ambss,BSS_C
     CNOP    0,4
+bgpl:
+    ds.b    bplsize
+bgplhi:
+    ds.b    bplsize
+    CNOP    0,4
 cbuf:
     ds.b    stwidth*csize     ; state display buffer
-    CNOP    0,4
-bgpl:
-    ds.b    bplsize*2
 
 ;-----functions------------
     SECTION amc,CODE
 
 ;-----nextstate------------
 ; Compute next cell state.
-; uses a0-a1,d0-d4
+; uses a0-a2,d0-d4
     CNOP    0,4
 nextstate:
     lea     state,a0          ; state address
@@ -333,11 +398,7 @@ nextstate:
     clr.l   d0
     move.w  pos,d0            ; current position 
     move.l  d0,d1
-    addq    #1,d1             ; next position
-    cmp.w   #nstates,d1
-    bne     .nowrap
-    clr.l   d1
-.nowrap:
+    incmod  d1,nstates
     move.w  d1,pos            ; save new position
     mulu.w  #stwidth,d0
     mulu.w  #stwidth,d1
@@ -369,13 +430,13 @@ nextstate:
     move.b  d1,(a1)           ; store new state
     rts
 
-;-----drawstate(d6)--------
-; Render the cell state at position in d6 to cbuf.
-; uses a0-a1,d0-d3, preserves d6.
+;-----drawstate(d0)--------
+; Render the cell state at position in d0
+; to render buffer cbuf.
+; uses a0-a1,d0-d3
     CNOP    0,4
 drawstate:
     waitblt                   ; dont change before blitter done!
-    move.l  d6,d0
     lea     state,a0          ; compute state addr
     mulu.w  #stwidth,d0
     add.l   d0,a0
@@ -407,21 +468,19 @@ drawstate:
     dbra    d1,.copyout
     rts 
 
-;-----copystate(d6)-------
-; Copy the contents of the state buffer cbuf into
-; the display at row indicated by d0.
-; uses a0,d0-d1, preserves d6
+;-----copystate(a1,d6)-------
+; Copy the contents of the rendered state at a0
+; into the display at address a1
+; uses d0-d1
     CNOP    0,4
 copystate:
     waitblt
-    move.l  d6,d0
-    lea     bgpl,a0           ; get screen base
-    mulu.w  #bplwidth,d0      ; calculate row offset
-    mulu.w  #csize,d0
-    add.w   #coff,d0          ; add cell offset
-    add.l   d0,a0             ; start address (dest)
-    move.l  a0,_BLTDPT        ; set D pointer
-    lea     cbuf,a0
+;   lea     bgpl,a0           ; get screen base
+;   mulu.w  #bplwidth,d0      ; calculate row offset
+;   mulu.w  #csize,d0
+;   add.w   #coff,d0          ; add cell offset
+;   add.l   d0,a0             ; start address (dest)
+    move.l  a1,_BLTDPT        ; set D pointer
     move.l  a0,_BLTAPT        ; set A pointer
     clr.w   _BLTAMOD          ; set A modulo
     move.w  #coff*2,_BLTDMOD  ; set D modulo 

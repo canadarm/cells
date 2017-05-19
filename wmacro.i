@@ -58,4 +58,28 @@ setblt      MACRO
     move.w  #$F,(\1)
     ENDM
 
+;-----incmod(a,m)----------
+; increment given dr modulo
+; immediate m (word)
+incmod      MACRO
+    addq    #1,\1
+    cmp.w   #(\2),\1
+    blt.b   .nowrap\@
+    sub.w   #(\2),\1
+.nowrap\@:
+    ENDM
+decmod      MACRO
+    add.w   #(\2-1),\1
+    cmp.w   #(\2),\1
+    blt.b   .nowrap\@
+    sub.w   #(\2),\1
+.nowrap\@:
+    ENDM
+addmod      MACRO
+    add.l   #(\2),\1
+    cmp.l   #(\3),\1
+    blt.b   .nowrap\@
+    sub.l   #(\3),\1
+.nowrap\@:
+    ENDM
 
