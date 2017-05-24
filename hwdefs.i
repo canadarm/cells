@@ -104,6 +104,7 @@ _COP2LCL  equ     CUSTOM+cop2lc+$02
 *
 * Audio channel registers
 *
+AUDOFFSET equ     (aud1-aud0)
 _ADKCON   equ     CUSTOM+adkcon          ; Just capitalization...
 _AUD0LC   equ     CUSTOM+aud0
 _AUD0LCH  equ     CUSTOM+aud0
@@ -570,6 +571,7 @@ DMAF_SPR  equ     $8220 ; sprite enable
 DMAF_DSK  equ     $8210 ; disk enable
 DMAF_ALL  equ     $83E0 ; all but disk
 DMAF_ALLN equ     $85E0 ; all but disk + pri bit
+DMAF_ALLA equ     $83EF ; all but disk + audio
 DMAF_AUD0 equ     $8201 ; enable aud0
 DMAF_AUD1 equ     $8202 ; enable aud1
 DMAF_AUD2 equ     $8204 ; enable aud2

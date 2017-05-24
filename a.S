@@ -1,6 +1,6 @@
     JUMPPTR init
     INCDIR  "git/"
-    INCLUDE "tabsin.i"
+    INCLUDE "tabsaw.i"
     INCLUDE "scales.i"
     INCLUDE "wmacro.i"
     INCLUDE "hwdefs.i"
@@ -143,6 +143,11 @@ init:
 .inittrig:
     move.b  #1,(a0)+
     dbra    d4,.inittrig
+    lea     seql,a0
+    move.w  #ncols-1,d4
+.initlen:
+    move.b  #seqlen,(a0)+
+    dbra    d4,.initlen 
     clr.l   d0
     jsr     mkseq
 
@@ -174,14 +179,16 @@ init:
     move.b  #(period>>8),CIATBHI(a6) 
     move.w  #$2070,_INTREQ      ; clear pending lvl3/6 
     move.w  #$2070,_INTREQ      ; ... twice
-    move.w  #$7FFF,_DMACON
-    move.w  #DMAF_ALL,_DMACON
-    move.w  _COPJMP1,d0         ; start copper
     move.l  #coperint,$6C.w     ; install lvl3 handler
     move.l  #timerint,$78.w     ; install lvl6 handler (cia-a)
     move.w  #$E020,_INTENA      ; enable lvl3/6
     move.b  #$82,CIAICR(a6)     ; enable TB interrupt
+    waitr   a1,d0,d1,d2
     bset.b  #0,CIACRB(a6)       ; start timer
+    move.w  _COPJMP1,d0         ; start copper
+    move.w  #$8000,_ADKCON      ; clear mod bits
+    move.w  #$7FFF,_DMACON      
+    move.w  #DMAF_ALLA,_DMACON  ; start DMA
     ENDC
 
 ;-----frame loop start-------
@@ -294,7 +301,7 @@ coperint:
     rte
 
 timerint:
-    movem.l d1-d6/a0-a2,-(sp)
+    movem.l d1-d6/a0-a6,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #13,d0              ; PORTS handler
     beq     .exit
@@ -316,8 +323,9 @@ timerint:
     bne.b   .exit
     add.l   #1,ctr              ; DEBUG
     jsr     nextstate
+    jsr     playseq
 .exit:
-    movem.l (sp)+,d1-d6/a0-a2
+    movem.l (sp)+,d1-d6/a0-a6
     nop
     rte
 
@@ -369,10 +377,19 @@ seq:
     ds.w    seqlen*ncols        ; sequence note lists
 seqtrig:
     ds.b    seqlen*ncols        ; sequence enable bits
+seqparms:
+seqp:
+    ds.b    ncols               ; sequence position
 seql:
     ds.b    ncols               ; length of seqs
 seqoct:
     ds.b    ncols               ; octaves
+
+SQLEN       equ     (seqlen*2)          ; seq length (bytes)
+SQP         equ     (seqp-seqparms)     ; seqp offset
+SQL         equ     (seql-seqparms)     ; seql offset
+SQV         equ     (seqoct-seqparms)   ; seqoct offset
+
 
 ;-----copper lists---------
     SECTION amdc,DATA_C
@@ -507,12 +524,13 @@ copystate:
 ;-----mkseq(d0)--------------
 ; Given a mode index, write period values into
 ; seq for each channel.
-; uses a3-a6,d1-d5.
+; uses a2-a6,d1-d5.
     CNOP    0,4
 mkseq:
     lea     modes,a6          ; get mode base
     lea     ptab,a5           ; get period table base
     lea     seq,a4            ; seq base
+    lea     seqtrig,a2        ; triggers
     lea     seqoct,a3         ; get octave values
     clr.l   d5                ; zero index reg
     lsl.l   #modelenlog,d0    ; get mode offset
@@ -528,12 +546,53 @@ mkseq:
     move.w  #seqlen-1,d4      ; loop counter
 .inner:
     move.b  (a6)+,d5          ; get offset
+    move.b  (a2)+,d1          ; get trigger
+    cmp.b   #0,d1
+    beq.b   .notrig
     add.b   d6,d5             ; add to root
     lsl.b   #1,d5             ; get word offset
     move.w  (a5,d5),d3        ; load period value
     move.w  d3,(a4)+          ; store into seq
     dbra    d4,.inner
     dbra    d2,.outer
+    rts
+.notrig:
+    move.w  #0,(a4)+          ; store into seq
+    dbra    d4,.inner
+    dbra    d2,.outer
+    rts
+
+;-----playseq()-------------
+; Play next sequence notes.
+    CNOP    0,4
+playseq:
+    lea     seqparms,a6       ; length/oct/pos
+    lea     seq,a5            ; sequence lists
+    move.l  #_AUD0LC,a4       ; audio register base
+    move.w  #ncols-1,d6       ; loop counter
+.loop:
+    move.b  SQP(a6),d5        ; position
+    move.b  d5,d4             ; offset
+    lsl.b   #1,d4
+    move.w  (a5,d4),d3        ; period
+    addq    #1,d5             ; increment position
+    cmp.b   SQL(a6),d5
+    bne.b   .nowrap
+    clr.b   d5
+.nowrap:
+    move.b  d5,SQP(a6)        ; new position
+    move.w  #TABSIZE,4(a4)    ; length
+    move.l  #wav32,0(a4)      ; pointer
+    move.w  #64,8(a4)         ; volume
+    cmp.w   #0,d3
+    bne     .trig
+    move.w  #0,8(a4)          ; no volume
+.trig:
+    move.w  d3,6(a4)          ; period
+    add.l   #AUDOFFSET,a4     ; next channel
+    addq    #1,a6             ; next track
+    add.l   #SQLEN,a5         ; ""
+    dbra    d6,.loop
     rts
 
 ;------------------------------------------------------------------------------

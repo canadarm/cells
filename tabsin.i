@@ -1,4 +1,4 @@
-TABSIZE     equ   32   ; waveform table size (words)
+TABSIZE     equ   16   ; waveform table size (words)
 
     SECTION amdc,DATA_C
     CNOP    0,4
