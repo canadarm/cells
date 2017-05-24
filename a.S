@@ -1,6 +1,8 @@
-   SECTION amc,CODE
     JUMPPTR init
     INCDIR  "git/"
+    INCLUDE "tabsin.i"
+    INCLUDE "scales.i"
+    INCLUDE "wmacro.i"
     INCLUDE "hwdefs.i"
     INCDIR  "Include/"
     INCLUDE "exec/exec_lib.i"
@@ -19,12 +21,14 @@ bplwidthw   equ bplwidth/2      ; width in words
 bplwidthl   equ bplwidth/4      ; width in dwords
 
 ;-----state defs-----------
-ncells      equ 32              ; cell count
+ncellslog   equ 5
+ncells      equ (1<<ncellslog)  ; cell count
 csizelog    equ 3               ; log2(csize)
 csize       equ (1<<csizelog)   ; cell size (bits)
 csizeb      equ (csize/8)       ; cell size (bytes)
 nstates     equ height/csize    ; number of states
 stwidth     equ ncells*csizeb   ; state size in bytes
+stwidthlog  equ (ncellslog+(csizelog-3))
 stlast      equ stwidth-1       ; last state offset
 stwidthw    equ stwidth/2       ; state size in words
 stwidthl    equ stwidth/4       ; state size in dwords
@@ -50,11 +54,6 @@ coffw       equ (bplwidthw-stwidthw)/2  ; offset of cell display in words
 ; 120 bpm = 32dq/s ~ 22371 (NTSC)
 ; 60hz ~ 11934 (NTSC)
 period      equ 14800
-
-;-----macro functions------
-; waitr, waitblt, setblt
-    INCDIR  "git/"
-    INCLUDE "wmacro.i"
 
 ;-----entry point----------
 ; most of the CIA saving is trying
@@ -132,6 +131,20 @@ init:
     move.b  #1,16(a0)
     move.l  #0,copypos
     move.l  #width,bplpos
+
+;-----init sequence--------
+    lea     seqoct,a0
+    move.w  #ncols-1,d4
+.initoct:
+    move.b  #2,(a0)+
+    dbra    d4,.initoct
+    lea     seqtrig,a0
+    move.w  #(seqlen*ncols-1),d4
+.inittrig:
+    move.b  #1,(a0)+
+    dbra    d4,.inittrig
+    clr.l   d0
+    jsr     mkseq
 
 ;-----setup copper list----
     move.l  #bgpl,d0            ; set up bg pointer
@@ -230,8 +243,6 @@ init:
     ENDC
     movem.l (sp)+,d1-d7/a0-a6
     move.l  ctr,d0              ; DEBUG
-    move.l  ctr2,d1
-    move.l  ctr3,d2
     move.w  pos,d3
     rts
 
@@ -334,10 +345,6 @@ xoncount:
     ds.b    4                   ; count of changes by column
 ctr:
     dc.l    0
-ctr2:
-    dc.l    0
-ctr3:
-    dc.l    0
 cpos:
     dc.b    0                   ; scroll position mod 8
 
@@ -357,6 +364,15 @@ gfxname:
     CNOP    0,4
 state:
     ds.b    stsize
+    EVEN
+seq:
+    ds.w    seqlen*ncols        ; sequence note lists
+seqtrig:
+    ds.b    seqlen*ncols        ; sequence enable bits
+seql:
+    ds.b    ncols               ; length of seqs
+seqoct:
+    ds.b    ncols               ; octaves
 
 ;-----copper lists---------
     SECTION amdc,DATA_C
@@ -369,7 +385,7 @@ copptrl:
 copptrh:
     dc.w    0
 coplist:
-    dcb.l   64,CL_END
+    dcb.l   64, CL_END
 ;   dc.w    $C801,$FF00     ; wait for line 200
 ;   dc.w    INTREQ_,$8010   ; trigger lvl3 irq
 
@@ -383,6 +399,7 @@ bgplhi:
     CNOP    0,4
 cbuf:
     ds.b    stwidth*csize     ; state display buffer
+    CNOP    0,4
 
 ;-----functions------------
     SECTION amc,CODE
@@ -400,8 +417,8 @@ nextstate:
     move.l  d0,d1
     incmod  d1,nstates
     move.w  d1,pos            ; save new position
-    mulu.w  #stwidth,d0
-    mulu.w  #stwidth,d1
+    lsl.w   #stwidthlog,d0
+    lsl.w   #stwidthlog,d1
     add.l   d0,a0             ; current state
     add.l   d1,a1             ; next state
     clr     d4                ; shift buffer
@@ -436,9 +453,9 @@ nextstate:
 ; uses a0-a1,d0-d3
     CNOP    0,4
 drawstate:
-    waitblt                   ; dont change before blitter done!
+    waitblt
     lea     state,a0          ; compute state addr
-    mulu.w  #stwidth,d0
+    lsl.w   #stwidthlog,d0
     add.l   d0,a0
     lea     cbuf,a1           ; cell ptr
     move.w  #ncells-1,d0      ; loop counter
@@ -475,11 +492,6 @@ drawstate:
     CNOP    0,4
 copystate:
     waitblt
-;   lea     bgpl,a0           ; get screen base
-;   mulu.w  #bplwidth,d0      ; calculate row offset
-;   mulu.w  #csize,d0
-;   add.w   #coff,d0          ; add cell offset
-;   add.l   d0,a0             ; start address (dest)
     move.l  a1,_BLTDPT        ; set D pointer
     move.l  a0,_BLTAPT        ; set A pointer
     clr.w   _BLTAMOD          ; set A modulo
@@ -490,6 +502,38 @@ copystate:
     lsl.w   #6,d1             ; move height into position
     or.w    d1,d0             
     move.w  d0,_BLTSIZE       ; start the blit
+    rts
+
+;-----mkseq(d0)--------------
+; Given a mode index, write period values into
+; seq for each channel.
+; uses a3-a6,d1-d5.
+    CNOP    0,4
+mkseq:
+    lea     modes,a6          ; get mode base
+    lea     ptab,a5           ; get period table base
+    lea     seq,a4            ; seq base
+    lea     seqoct,a3         ; get octave values
+    clr.l   d5                ; zero index reg
+    lsl.l   #modelenlog,d0    ; get mode offset
+    add.l   d0,a6             ; mode address
+    move.w  #ncols-1,d2       ; loop counter
+.outer:
+    move.b  root,d6           ; get root note
+    move.b  (a3)+,d1          ; load octave
+    lsl.b   #2,d1             ; oct * 12 + root
+    add.b   d1,d6
+    lsl.b   #1,d1
+    add.b   d1,d6
+    move.w  #seqlen-1,d4      ; loop counter
+.inner:
+    move.b  (a6)+,d5          ; get offset
+    add.b   d6,d5             ; add to root
+    lsl.b   #1,d5             ; get word offset
+    move.w  (a5,d5),d3        ; load period value
+    move.w  d3,(a4)+          ; store into seq
+    dbra    d4,.inner
+    dbra    d2,.outer
     rts
 
 ;------------------------------------------------------------------------------

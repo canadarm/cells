@@ -1,9 +1,5 @@
-          IFND    HWDEFS_I
-HWDEFS_I  SET     1
-          IFND    HARDWARE_CUSTOM_I
           INCDIR  "Include/"
           INCLUDE "hardware/custom.i"
-          ENDC
 *******************************************************************************
 *
 * This instruction for the copper will cause it to wait forever since
@@ -674,4 +670,3 @@ CIASDR    equ   $0C00
 CIAICR    equ   $0D00
 CIACRA    equ   $0E00
 CIACRB    equ   $0F00
-          ENDC

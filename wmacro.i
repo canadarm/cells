@@ -83,3 +83,13 @@ addmod      MACRO
 .nowrap\@:
     ENDM
 
+;-----setaud(c,a,len,vol,per)--
+; set audio chan c params
+; uses given ar (a)
+setaud      MACRO
+    move.w  \3,CUSTOM+aud\1+$04 ; set length
+    move.l  \2,CUSTOM+aud\1     ; set pointer
+    move.w  \4,CUSTOM+aud\1+$08 ; set volume
+    move.w  \5,CUSTOM+aud\1+$06 ; set period
+    ENDM
+
