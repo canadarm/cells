@@ -136,7 +136,7 @@ init:
     lea     seqoct,a0
     move.w  #ncols-1,d4
 .initoct:
-    move.b  #2,(a0)+
+    move.b  #1,(a0)+
     dbra    d4,.initoct
     lea     seqtrig,a0
     move.w  #(seqlen*ncols-1),d4
@@ -148,7 +148,12 @@ init:
 .initlen:
     move.b  #seqlen,(a0)+
     dbra    d4,.initlen 
-    clr.l   d0
+    lea     seqdec,a0
+    move.w  #ncols-1,d4
+.initdec:
+    move.b  #16,(a0)+
+    dbra    d4,.initdec
+    move.l  #1,d0
     jsr     mkseq
 
 ;-----setup copper list----
@@ -293,6 +298,23 @@ coperint:
     lea     cbuf,a0             ; source address
     bsr     copystate           ; render new state
 .nodraw:
+    lea     seqctl,a0           ; envelope state
+    move.l  #_AUD0LC,a1         ; audio ptr
+    clr.l   d3                  ; zero volume reg
+    move.w  #ncols-1,d4         ; loop counter
+.loop:
+    move.b  SQE(a0),d3          ; volume amount
+    move.b  SQD(a0),d2          ; decay amount
+    sub.b   d2,d3
+    cmp.b   #0,d3
+    bgt.b   .pos
+    clr.l   d3
+.pos
+    move.b  d3,SQE(a0)          ; update env
+    move.w  d3,8(a1)            ; set volume
+    add.l   #AUDOFFSET,a1       ; next channel
+    addq    #1,a0               ; next track
+    dbra    d4,.loop 
     move.w  #$4020,_INTREQ      ; clear INTREQ
     move.w  #$4020,_INTREQ      ; ... twice
 .exit:
@@ -384,11 +406,22 @@ seql:
     ds.b    ncols               ; length of seqs
 seqoct:
     ds.b    ncols               ; octaves
+seqctl:
+seqenv:
+    ds.b    ncols               ; envelopes
+seqatt:
+    ds.b    ncols               ; decay
+seqdec:
+    ds.b    ncols               ; decay
+    
 
 SQLEN       equ     (seqlen*2)          ; seq length (bytes)
 SQP         equ     (seqp-seqparms)     ; seqp offset
 SQL         equ     (seql-seqparms)     ; seql offset
 SQV         equ     (seqoct-seqparms)   ; seqoct offset
+SQE         equ     (seqenv-seqctl)
+SQA         equ     (seqatt-seqctl)
+SQD         equ     (seqdec-seqctl)
 
 
 ;-----copper lists---------
@@ -569,6 +602,7 @@ playseq:
     lea     seqparms,a6       ; length/oct/pos
     lea     seq,a5            ; sequence lists
     move.l  #_AUD0LC,a4       ; audio register base
+    lea     seqctl,a3
     move.w  #ncols-1,d6       ; loop counter
 .loop:
     move.b  SQP(a6),d5        ; position
@@ -584,6 +618,7 @@ playseq:
     move.w  #TABSIZE,4(a4)    ; length
     move.l  #wav32,0(a4)      ; pointer
     move.w  #64,8(a4)         ; volume
+    move.b  #64,SQE(a3)       ; envelope
     cmp.w   #0,d3
     bne     .trig
     move.w  #0,8(a4)          ; no volume
@@ -591,6 +626,7 @@ playseq:
     move.w  d3,6(a4)          ; period
     add.l   #AUDOFFSET,a4     ; next channel
     addq    #1,a6             ; next track
+    addq    #1,a3             ; ""
     add.l   #SQLEN,a5         ; ""
     dbra    d6,.loop
     rts
