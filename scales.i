@@ -5,8 +5,9 @@ scalecnt    equ 6                 ; number of scales/leads
 modelenlog  equ (seqlenlog+2)     ; mode block size (log)
 modelen     equ (1<<modelenlog)
 
-    SECTION amd,DATA
 ;-----sequence lists----------
+    SECTION amd,DATA
+    EVEN
 root:       
     dc.b    0
     CNOP    0,4

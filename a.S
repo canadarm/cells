@@ -1,7 +1,5 @@
     JUMPPTR init
     INCDIR  "git/"
-    INCLUDE "tabsaw.i"
-    INCLUDE "scales.i"
     INCLUDE "wmacro.i"
     INCLUDE "hwdefs.i"
     INCDIR  "Include/"
@@ -62,18 +60,21 @@ period      equ 14800
     SECTION amc,CODE
     CNOP    0,4
 init:
-    movem.l d1-d7/a0-a6,-(sp)
+    movem.l d1-d6/a0-a6,-(sp)
     move.w  _DMACONR,d1         ; save control regs
     move.w  _INTENAR,d2   
     move.w  _INTREQR,d3
     move.w  _ADKCONR,d4
     movem.l d1-d4,-(sp)
     move.l  #CIAB,a6            ; save CIA-B regs
+    move.b  CIACRA(a6),d0
     move.b  CIACRB(a6),d1
     move.b  CIAICR(a6),d2
     move.b  CIATBLO(a6),d3
     move.b  CIATBHI(a6),d4
-    movem.l d1-d4,-(sp)
+    move.b  CIATALO(a6),d5
+    move.b  CIATAHI(a6),d6
+    movem.l d0-d6,-(sp)
     move.l  #CIAA,a6            ; save CIA-A regs
     move.b  CIACRA(a6),d1
     move.b  CIAICR(a6),d2
@@ -158,10 +159,13 @@ init:
     lea     seqdec,a0
     move.w  #ncols-1,d4
 .initdec:
-    move.b  #16,(a0)+
+    move.b  #12,(a0)+
     dbra    d4,.initdec
     move.l  #1,d0
     jsr     mkseq
+
+;-----other init-----------
+    clr.b   key
 
 ;-----setup copper list----
     move.l  #bgpl,d0            ; set up bg pointer
@@ -194,7 +198,7 @@ init:
     move.b  #(period>>8),CIATBHI(a6) 
     move.w  #$6078,_INTREQ      ; clear pending lvl2/3/6 
     move.w  #$6078,_INTREQ      ; ... twice
-    move.l  #keyint,$68.w       ; install lvl2 handler (cia-a)
+;   move.l  #keyint,$68.w       ; install lvl2 handler (cia-a)
     move.l  #vblankint,$6C.w    ; install lvl3 handler
     move.l  #timerint,$78.w     ; install lvl6 handler (cia-b)
     move.w  #$E028,_INTENA      ; enable lvl2/3/6
@@ -215,7 +219,6 @@ init:
     bne     .mainloop
 ;-----frame loop end---------
 
-.exit:
 ;-----exit code------------
     move.w  #$7FFF,_INTENA      ; turn off interrupts
     move.l  #CIAB,a6
@@ -223,6 +226,7 @@ init:
     bclr.b  #0,CIACRB(a6)       ; stop timer
     move.b  #$7F,CIAICR(a6)     ; clear CIA-B interrupts
     move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
+.end:
     movem.l (sp)+,d1-d2         ; pop saved copper,view
     movem.l (sp)+,d3-d4         ; pop CIA-A regs
     IFND DEBUG
@@ -231,33 +235,40 @@ init:
     or.b    #$80,d4
     move.b  d4,CIAICR(a5)
     ENDC
-    movem.l (sp)+,d3-d6         ; pop CIA-B regs
+    movem.l (sp)+,d3-d6         ; pop CIA-B timer regs
+    IFND DEBUG
+    move.b  d3,CIATBLO(a6)
+    move.b  d4,CIATBHI(a6)
+    move.b  d5,CIATALO(a6)
+    move.b  d6,CIATAHI(a6)
+    ENDC
+    movem.l (sp)+,d3-d5         ; pop CIA-B control regs
     IFND DEBUG
     or.b    #$80,d3             ; write bit
-    move.b  d3,CIACRB(a6)
-    or.b    #$80,d4             ; write bit
-    move.b  d4,CIAICR(a6)
-    move.b  d5,CIATBLO(a6)
-    move.b  d6,CIATBHI(a6)
+    move.b  d3,CIACRA(a6)
+    or.b    #$80,d4 
+    move.b  d4,CIACRB(a6)
+    or.b    #$80,d5
+    move.b  d5,CIAICR(a6)
     ENDC
-    movem.l (sp)+,d3-d6         ; pop saved regs
+    movem.l (sp)+,d3-d6         ; pop saved system control regs
     IFND DEBUG
-    or.w    #$8000,d3           ; restore regs (set bit 15 to write)
+    or.w    #$8000,d3           ; write bit
     move.w  #$7FFF,_DMACON  
     move.w  d3,_DMACON
     or.w    #$8000,d4
-    move.w  #$7FFF,_INTENA 
+    move.w  #$7FFF,_INTENA      ; disable ints before resotre
     move.l  savelvl2,d0         ; restore lvl2 handler
     move.l  d0,$68.w
     move.l  savelvl3,d0         ; restore lvl3 handler
     move.l  d0,$6C.w
     move.l  savelvl6,d0         ; restore lvl6 handler
     move.l  d0,$78.w
-    move.w  d4,_INTENA
+    move.w  d4,_INTENA          ; restore interrupts
     or.w    #$8000,d5
+    move.w  #$7FFF,_INTREQ      ; clear pending
     move.w  #$7FFF,_INTREQ
-    move.w  #$7FFF,_INTREQ
-    move.w  d5,_INTREQ
+    move.w  d5,_INTREQ          ; restore reqs
     or.w    #$8000,d6
     move.w  #$7FFF,_ADKCON
     move.w  d6,_ADKCON
@@ -275,7 +286,7 @@ init:
     IFND DEBUG
     jsr     -132(a6)            ; permit MT
     ENDC
-    movem.l (sp)+,d1-d7/a0-a6
+    movem.l (sp)+,d1-d6/a0-a6
     move.l  ctr,d0              ; DEBUG
     move.l  ctr2,d1
     move.w  pos,d3
@@ -284,35 +295,68 @@ init:
 ;------interrupts----------
 
 keyint:
-    movem.l d5-d6/a0,-(sp)
+    movem.l d4-d6/a0-a1,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #3,d0               ; PORTS handler
     beq     .exit
     move.l  #CIAA,a0            ; CIA-A base
     btst    #3,CIAICR(a0)       ; test SP bit
     beq     .exit
+    move.l  #CIAB,a1            ; CIA-B base
+    move.b  CIACRA(a1),d4       ; save timer bits
+    and.b   #$C0,CIACRA(a1)     ; set timer bits
+    or.b    #$98,CIACRA(a1)     ; force load, pulse
+    move.b  #$1f,CIATALO(a1)    ; set clock for handshake
+    move.b  #$00,CIATAHI(a1)    ; .. and start
+    move.b  CIATALO(a1),d6      ; DEBUG
+    move.b  d6,ctr
     move.b  CIASDR(a0),d6       ; load serial data
     or.b    #$40,CIACRA(a0)     ; set output mode
     not.b   d6                  ; decode key
     ror.b   #1,d6               ; ..
     and.w   #$7F,d6             ; ..
-    move.w  d6,ctr2
-    cmp.b   #$40,d6             ; space
-    bne.b   .done
-    add.w   #1,rule             ; increment rule
-.done
-    moveq   #3-1,d6             ; handshake code
-.wait1:
-    move.b  _VHPOSR,d5
-.wait2:
-    cmp.b   _VHPOSR,d5
-    beq     .wait2
-    dbf     d6,.wait1
+    cmp.b   #$40,d6             ; key test
+    beq.b   .space
+    cmp.b   #$20,d6
+    bge.b   .row2
+    cmp.b   #$10,d6
+    bge.b   .row1
+    bra     .rest
+.space:
+    lea     state,a0
+    move.w  pos,d6              ; get current position
+    lsl.w   #stwidthlog,d6      ; ..
+    move.w  #(ncells/4)-1,d5    ; loop counter
+.clear:
+    clr.l   (a0,d6.w)
+    addq    #4,d6
+    dbra    d5,.clear
+    move.w  pos,d6              ; get current position
+    lsl.w   #stwidthlog,d6      ; ..
+    add.w   #(ncells/2),d6
+    move.b  #1,(a0,d6.w)
+    bra     .rest
+.row1:
+    lea     seqdec,a0
+    and.w   #$03,d6
+    sub.b   #1,(a0,d6.w)
+    bra     .rest
+.row2:
+    lea     seqdec,a0
+    and.w   #$03,d6
+    add.b   #1,(a0,d6.w)
+    bra     .rest
+.rest:
+    move.b  CIATALO(a1),d6      ; DEBUG
+    move.b  d6,ctr2
+    cmp.b   #0,CIATALO(a1)
+    bne.b   .rest
     and.b   #$BF,CIACRA(a0)     ; set input mode
+    move.b  d4,CIACRA(a1)       ; restore CRA-A 
 .exit:
     move.w  #$4008,_INTREQ      ; clear INTREQ
     move.w  #$4008,_INTREQ      ; ... twice
-    movem.l (sp)+,d5-d6/a0
+    movem.l (sp)+,d4-d6/a0-a1
     rte
     
 vblankint:
@@ -404,6 +448,12 @@ timerint:
     movem.l (sp)+,d1-d6/a0-a6
     rte
 
+;-----tables---------------
+    INCDIR  "git/"
+    INCLUDE "tabsaw.i"
+    INCLUDE "scales.i"
+
+    SECTION amd,DATA
 ;------locals--------------
     EVEN
 pos:
@@ -423,15 +473,17 @@ rule:
 negate:
     dc.w    0                   ; 1 to flip states
 oncount:
-    ds.b    4                   ; count of set bits by column
+    ds.b    ncols               ; count of set bits by column
 xoncount:
-    ds.b    4                   ; count of changes by column
+    ds.b    ncols               ; count of changes by column
 ctr:
     dc.l    0
 ctr2:
     dc.l    0
 cpos:
     dc.b    0                   ; scroll position mod 8
+key:
+    dc.b    0                   ; last key press
 
 ;------saves/system--------
     EVEN
@@ -447,11 +499,12 @@ gfxname:
     dc.b    "graphics.library",0
 
 ;-----cell state-----------
-    SECTION amd,DATA
     CNOP    0,4
 state:
     ds.b    stsize
-    EVEN
+
+;-----sequencer data--------
+    CNOP    0,4
 seq:
     ds.w    seqlen*ncols        ; sequence note lists
 seqtrig:
@@ -470,8 +523,8 @@ seqatt:
     ds.b    ncols               ; decay
 seqdec:
     ds.b    ncols               ; decay
-    
 
+;-----sequencer addressing----
 SQLEN       equ     (seqlen*2)          ; seq length (bytes)
 SQP         equ     (seqp-seqparms)     ; seqp offset
 SQL         equ     (seql-seqparms)     ; seql offset
@@ -479,7 +532,6 @@ SQV         equ     (seqoct-seqparms)   ; seqoct offset
 SQE         equ     (seqenv-seqctl)
 SQA         equ     (seqatt-seqctl)
 SQD         equ     (seqdec-seqctl)
-
 
 ;-----copper lists---------
     SECTION amdc,DATA_C
