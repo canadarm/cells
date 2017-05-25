@@ -63,17 +63,21 @@ period      equ 14800
     CNOP    0,4
 init:
     movem.l d1-d7/a0-a6,-(sp)
-    move.w  _DMACONR,d1         ; save regs
+    move.w  _DMACONR,d1         ; save control regs
     move.w  _INTENAR,d2   
     move.w  _INTREQR,d3
     move.w  _ADKCONR,d4
     movem.l d1-d4,-(sp)
-    move.l  #CIAB,a6            ; CIA-B base
-    move.b  CIACRB(a6),d1       ; save more regs
+    move.l  #CIAB,a6            ; save CIA-B regs
+    move.b  CIACRB(a6),d1
     move.b  CIAICR(a6),d2
     move.b  CIATBLO(a6),d3
     move.b  CIATBHI(a6),d4
     movem.l d1-d4,-(sp)
+    move.l  #CIAA,a6            ; save CIA-A regs
+    move.b  CIACRA(a6),d1
+    move.b  CIAICR(a6),d2
+    movem.l d1-d2,-(sp)
     move.l  4.w,a6              ; get execbase
     clr.l   d0                  ; start lib calls
     move.l  #gfxname,a1     
@@ -136,7 +140,10 @@ init:
     lea     seqoct,a0
     move.w  #ncols-1,d4
 .initoct:
-    move.b  #1,(a0)+
+    move.b  d4,d3
+    and.b   #1,d3
+    add.b   #1,d3
+    move.b  d3,(a0)+
     dbra    d4,.initoct
     lea     seqtrig,a0
     move.w  #(seqlen*ncols-1),d4
@@ -166,6 +173,8 @@ init:
     ENDC
 
 ;-----install ints---------
+    move.l  $68.w,d0            ; save lvl2 handler
+    move.l  d0,savelvl2
     move.l  $6C.w,d0            ; save lvl3 handler
     move.l  d0,savelvl3
     move.l  $78.w,d0            ; save lvl6 handler
@@ -175,20 +184,23 @@ init:
     IFND DEBUG
     waitr   a1,d0,d1,d2
     move.w  #$7fff,_INTENA      ; disable all bits in INTENA
-    move.l  #CIAB,a6            ; CIA-A base
-    move.b  CIACRB(a6),d0
-    and.b   #$C0,d0             ; continuous, pulse, PB6OFF
-    move.b  d0,CIACRB(a6)       ; set CRA
-    move.b  #$7F,CIAICR(a6)     ; clear CIA-A interrupts
+    move.l  #CIAA,a5            ; CIA-A base
+    move.l  #CIAB,a6            ; CIA-B base
+    tst.b   CIAICR(a5)          ; clear CIA-A interrupts
+    tst.b   CIAICR(a6)          ; clear CIA-B interrupts
+    and.b   #$BF,CIACRA(a5)     ; set SPMODE = input (0)
+    and.b   #$C0,CIACRB(a6)     ; continuous, pulse, PB6OFF
     move.b  #(period&$FF),CIATBLO(a6) ; set timer period
     move.b  #(period>>8),CIATBHI(a6) 
-    move.w  #$2070,_INTREQ      ; clear pending lvl3/6 
-    move.w  #$2070,_INTREQ      ; ... twice
-    move.l  #coperint,$6C.w     ; install lvl3 handler
-    move.l  #timerint,$78.w     ; install lvl6 handler (cia-a)
-    move.w  #$E020,_INTENA      ; enable lvl3/6
+    move.w  #$6078,_INTREQ      ; clear pending lvl2/3/6 
+    move.w  #$6078,_INTREQ      ; ... twice
+    move.l  #keyint,$68.w       ; install lvl2 handler (cia-a)
+    move.l  #vblankint,$6C.w    ; install lvl3 handler
+    move.l  #timerint,$78.w     ; install lvl6 handler (cia-b)
+    move.w  #$E028,_INTENA      ; enable lvl2/3/6
+    move.b  #$88,CIAICR(a5)     ; enable SP interrupt (keyboard)
     move.b  #$82,CIAICR(a6)     ; enable TB interrupt
-    waitr   a1,d0,d1,d2
+;   waitr   a1,d0,d1,d2
     bset.b  #0,CIACRB(a6)       ; start timer
     move.w  _COPJMP1,d0         ; start copper
     move.w  #$8000,_ADKCON      ; clear mod bits
@@ -206,13 +218,21 @@ init:
 .exit:
 ;-----exit code------------
     move.w  #$7FFF,_INTENA      ; turn off interrupts
-    move.l  #CIAB,a6            ; restore CIA regs
-    bclr.b  #0,CIACRB(a6)
-    move.b  #$7F,CIAICR(a6)     ; clear CIA-A interrupts
+    move.l  #CIAB,a6
+    move.l  #CIAA,a5
+    bclr.b  #0,CIACRB(a6)       ; stop timer
+    move.b  #$7F,CIAICR(a6)     ; clear CIA-B interrupts
+    move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
     movem.l (sp)+,d1-d2         ; pop saved copper,view
-    movem.l (sp)+,d3-d6         ; pop CIA regs
+    movem.l (sp)+,d3-d4         ; pop CIA-A regs
     IFND DEBUG
-    move.l  #CIAB,a6            ; restore CIA regs
+    or.b    #$80,d3             ; write bit
+    move.b  d3,CIACRA(a5)
+    or.b    #$80,d4
+    move.b  d4,CIAICR(a5)
+    ENDC
+    movem.l (sp)+,d3-d6         ; pop CIA-B regs
+    IFND DEBUG
     or.b    #$80,d3             ; write bit
     move.b  d3,CIACRB(a6)
     or.b    #$80,d4             ; write bit
@@ -227,6 +247,8 @@ init:
     move.w  d3,_DMACON
     or.w    #$8000,d4
     move.w  #$7FFF,_INTENA 
+    move.l  savelvl2,d0         ; restore lvl2 handler
+    move.l  d0,$68.w
     move.l  savelvl3,d0         ; restore lvl3 handler
     move.l  d0,$6C.w
     move.l  savelvl6,d0         ; restore lvl6 handler
@@ -255,12 +277,45 @@ init:
     ENDC
     movem.l (sp)+,d1-d7/a0-a6
     move.l  ctr,d0              ; DEBUG
+    move.l  ctr2,d1
     move.w  pos,d3
     rts
 
 ;------interrupts----------
 
-coperint:
+keyint:
+    movem.l d5-d6/a0,-(sp)
+    move.w  _INTREQR,d0         ; check req mask
+    btst    #3,d0               ; PORTS handler
+    beq     .exit
+    move.l  #CIAA,a0            ; CIA-A base
+    btst    #3,CIAICR(a0)       ; test SP bit
+    beq     .exit
+    move.b  CIASDR(a0),d6       ; load serial data
+    or.b    #$40,CIACRA(a0)     ; set output mode
+    not.b   d6                  ; decode key
+    ror.b   #1,d6               ; ..
+    and.w   #$7F,d6             ; ..
+    move.w  d6,ctr2
+    cmp.b   #$40,d6             ; space
+    bne.b   .done
+    add.w   #1,rule             ; increment rule
+.done
+    moveq   #3-1,d6             ; handshake code
+.wait1:
+    move.b  _VHPOSR,d5
+.wait2:
+    cmp.b   _VHPOSR,d5
+    beq     .wait2
+    dbf     d6,.wait1
+    and.b   #$BF,CIACRA(a0)     ; set input mode
+.exit:
+    move.w  #$4008,_INTREQ      ; clear INTREQ
+    move.w  #$4008,_INTREQ      ; ... twice
+    movem.l (sp)+,d5-d6/a0
+    rte
+    
+vblankint:
     movem.l d1-d6/a0-a2,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #5,d0               ; VBLANK handler
@@ -315,11 +370,10 @@ coperint:
     add.l   #AUDOFFSET,a1       ; next channel
     addq    #1,a0               ; next track
     dbra    d4,.loop 
+.exit:
     move.w  #$4020,_INTREQ      ; clear INTREQ
     move.w  #$4020,_INTREQ      ; ... twice
-.exit:
     movem.l (sp)+,d1-d6/a0-a2
-    nop
     rte
 
 timerint:
@@ -336,19 +390,18 @@ timerint:
     bne.b   .nodraw
     bset    #F_DRAW,flags       ; set draw bit
     move.w  pos,drawpos         ; set draw position
-    move.w  #$6000,_INTREQ      ; clear INTREQ
-    move.w  #$6000,_INTREQ      ; ... twice
 .nodraw
     and.b   #(csize-1),d0       ; mod and test 0
     move.b  d0,cpos
     cmp.b   #0,d0
-    bne.b   .exit
-    add.l   #1,ctr              ; DEBUG
+    bne.b   .done
     jsr     nextstate
     jsr     playseq
+.done 
 .exit:
+    move.w  #$6000,_INTREQ      ; clear INTREQ
+    move.w  #$6000,_INTREQ      ; ... twice
     movem.l (sp)+,d1-d6/a0-a6
-    nop
     rte
 
 ;------locals--------------
@@ -375,11 +428,15 @@ xoncount:
     ds.b    4                   ; count of changes by column
 ctr:
     dc.l    0
+ctr2:
+    dc.l    0
 cpos:
     dc.b    0                   ; scroll position mod 8
 
 ;------saves/system--------
     EVEN
+savelvl2:
+    dc.l    0                   ; saved lvl2 handler
 savelvl3:
     dc.l    0                   ; saved lvl3 handler
 savelvl6:
