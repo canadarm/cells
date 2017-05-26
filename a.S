@@ -7,6 +7,7 @@
     INCLUDE "exec/nodes.i"
 ;-----macro defs-----------
 ;DEBUG       SET 1
+;FIXME: keys work but hangs after return to asmone!
 
 ;-----screen defs----------
 width       equ 320             ; plane width
@@ -51,7 +52,8 @@ coffw       equ (bplwidthw-stwidthw)/2  ; offset of cell display in words
 ; PAL 7093,79 ~ 7094 = 10ms   | NTSC 7159,09 ~ 7159 = 10ms
 ; 120 bpm = 32dq/s ~ 22371 (NTSC)
 ; 60hz ~ 11934 (NTSC)
-period      equ 14800
+period      equ 14800           ; timer interrupt period
+kbhs        equ 65              ; keyboard handshake duration - 02 clocks
 
 ;-----entry point----------
 ; most of the CIA saving is trying
@@ -188,24 +190,26 @@ init:
     IFND DEBUG
     waitr   a1,d0,d1,d2
     move.w  #$7fff,_INTENA      ; disable all bits in INTENA
-    move.l  #CIAA,a5            ; CIA-A base
-    move.l  #CIAB,a6            ; CIA-B base
-    tst.b   CIAICR(a5)          ; clear CIA-A interrupts
-    tst.b   CIAICR(a6)          ; clear CIA-B interrupts
-    and.b   #$BF,CIACRA(a5)     ; set SPMODE = input (0)
-    and.b   #$C0,CIACRB(a6)     ; continuous, pulse, PB6OFF
-    move.b  #(period&$FF),CIATBLO(a6) ; set timer period
-    move.b  #(period>>8),CIATBHI(a6) 
     move.w  #$6078,_INTREQ      ; clear pending lvl2/3/6 
     move.w  #$6078,_INTREQ      ; ... twice
-;   move.l  #keyint,$68.w       ; install lvl2 handler (cia-a)
+    move.l  #CIAA,a5            ; CIA-A base
+    move.l  #CIAB,a6            ; CIA-B base
+    move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
+    move.b  #$7F,CIAICR(a6)     ; clear CIA-B interrupts
+    and.b   #$18,CIACRB(a5)     ; CIA-A TA: one-shot, KB input mode
+    and.b   #$C0,CIACRB(a6)     ; CIA-B TB: continuous, pulse, PB6OFF
+    move.b  #(period&$FF),CIATBLO(a6) ; set CIA-B timer B period 
+    move.b  #(period>>8),CIATBHI(a6)  ; ..for timer interrupt
+    move.b  #(kbhs&$FF),CIATBLO(a5)   ; set CIA-A timer B period
+    move.b  #(kbhs>>8),CIATBHI(a5)    ; .. for kb handshake
+    move.l  #keyint,$68.w       ; install lvl2 handler (cia-a)
     move.l  #vblankint,$6C.w    ; install lvl3 handler
     move.l  #timerint,$78.w     ; install lvl6 handler (cia-b)
     move.w  #$E028,_INTENA      ; enable lvl2/3/6
-    move.b  #$88,CIAICR(a5)     ; enable SP interrupt (keyboard)
-    move.b  #$82,CIAICR(a6)     ; enable TB interrupt
+    move.b  #$88,CIAICR(a5)     ; enable CIA-A SP interrupt (keyboard)
+    move.b  #$82,CIAICR(a6)     ; enable CIA-B TB interrupt
 ;   waitr   a1,d0,d1,d2
-    bset.b  #0,CIACRB(a6)       ; start timer
+    bset.b  #0,CIACRB(a6)       ; start CIA-B TB
     move.w  _COPJMP1,d0         ; start copper
     move.w  #$8000,_ADKCON      ; clear mod bits
     move.w  #$7FFF,_DMACON      
@@ -287,9 +291,6 @@ init:
     jsr     -132(a6)            ; permit MT
     ENDC
     movem.l (sp)+,d1-d6/a0-a6
-    move.l  ctr,d0              ; DEBUG
-    move.l  ctr2,d1
-    move.w  pos,d3
     rts
 
 ;------interrupts----------
@@ -302,57 +303,49 @@ keyint:
     move.l  #CIAA,a0            ; CIA-A base
     btst    #3,CIAICR(a0)       ; test SP bit
     beq     .exit
-    move.l  #CIAB,a1            ; CIA-B base
-    move.b  CIACRA(a1),d4       ; save timer bits
-    and.b   #$C0,CIACRA(a1)     ; set timer bits
-    or.b    #$98,CIACRA(a1)     ; force load, pulse
-    move.b  #$1f,CIATALO(a1)    ; set clock for handshake
-    move.b  #$00,CIATAHI(a1)    ; .. and start
-    move.b  CIATALO(a1),d6      ; DEBUG
-    move.b  d6,ctr
     move.b  CIASDR(a0),d6       ; load serial data
-    or.b    #$40,CIACRA(a0)     ; set output mode
+    or.b    #$01,CIACRB(a0)     ; start CIA-A TB (one shot)
+    or.b    #$40,CIACRA(a0)     ; set output mode (handshake)
     not.b   d6                  ; decode key
-    ror.b   #1,d6               ; ..
-    and.w   #$7F,d6             ; ..
-    cmp.b   #$40,d6             ; key test
+    lsr.b   #1,d6
+    bcs     .handshake
+    and.w   #$7F,d6             ; test key value
+    cmp.b   #$40,d6 
     beq.b   .space
     cmp.b   #$20,d6
     bge.b   .row2
     cmp.b   #$10,d6
     bge.b   .row1
-    bra     .rest
+    bra     .handshake
 .space:
-    lea     state,a0
+    lea     state,a1
     move.w  pos,d6              ; get current position
     lsl.w   #stwidthlog,d6      ; ..
     move.w  #(ncells/4)-1,d5    ; loop counter
 .clear:
-    clr.l   (a0,d6.w)
+    clr.l   (a1,d6.w)
     addq    #4,d6
     dbra    d5,.clear
     move.w  pos,d6              ; get current position
     lsl.w   #stwidthlog,d6      ; ..
     add.w   #(ncells/2),d6
-    move.b  #1,(a0,d6.w)
-    bra     .rest
+    move.b  #1,(a1,d6.w)
+    bra     .handshake
 .row1:
-    lea     seqdec,a0
+    lea     seqdec,a1
     and.w   #$03,d6
-    sub.b   #1,(a0,d6.w)
-    bra     .rest
+    sub.b   #1,(a1,d6.w)
+    bra     .handshake
 .row2:
-    lea     seqdec,a0
+    lea     seqdec,a1
     and.w   #$03,d6
-    add.b   #1,(a0,d6.w)
-    bra     .rest
-.rest:
-    move.b  CIATALO(a1),d6      ; DEBUG
-    move.b  d6,ctr2
-    cmp.b   #0,CIATALO(a1)
-    bne.b   .rest
+    add.b   #1,(a1,d6.w)
+    bra     .handshake
+.handshake:
+    moveq   #2,d6               ; busy wait for timer underflow
+    and.b   CIAICR(a0),d6
+    beq     .handshake
     and.b   #$BF,CIACRA(a0)     ; set input mode
-    move.b  d4,CIACRA(a1)       ; restore CRA-A 
 .exit:
     move.w  #$4008,_INTREQ      ; clear INTREQ
     move.w  #$4008,_INTREQ      ; ... twice
