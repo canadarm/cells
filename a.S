@@ -69,18 +69,18 @@ init:
     move.w  _ADKCONR,d4
     movem.l d1-d4,-(sp)
     move.l  #CIAB,a6            ; save CIA-B regs
-    move.b  CIACRA(a6),d0
-    move.b  CIACRB(a6),d1
-    move.b  CIAICR(a6),d2
-    move.b  CIATBLO(a6),d3
-    move.b  CIATBHI(a6),d4
-    move.b  CIATALO(a6),d5
-    move.b  CIATAHI(a6),d6
-    movem.l d0-d6,-(sp)
+    move.b  CIACRA(a6),d2
+    move.b  CIACRB(a6),d3
+    move.b  CIAICR(a6),d4
+    move.b  CIATBLO(a6),d5
+    move.b  CIATBHI(a6),d6
+    movem.l d2-d6,-(sp)
     move.l  #CIAA,a6            ; save CIA-A regs
     move.b  CIACRA(a6),d1
     move.b  CIAICR(a6),d2
-    movem.l d1-d2,-(sp)
+    move.b  CIATBLO(a6),d3
+    move.b  CIATBHI(a6),d4
+    movem.l d1-d4,-(sp)
     move.l  4.w,a6              ; get execbase
     clr.l   d0                  ; start lib calls
     move.l  #gfxname,a1     
@@ -190,8 +190,8 @@ init:
     IFND DEBUG
     waitr   a1,d0,d1,d2
     move.w  #$7fff,_INTENA      ; disable all bits in INTENA
-    move.w  #$6078,_INTREQ      ; clear pending lvl2/3/6 
-    move.w  #$6078,_INTREQ      ; ... twice
+    move.w  #$6028,_INTREQ      ; clear pending lvl2/3/6 
+    move.w  #$6028,_INTREQ      ; ... twice
     move.l  #CIAA,a5            ; CIA-A base
     move.l  #CIAB,a6            ; CIA-B base
     move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
@@ -205,10 +205,10 @@ init:
     move.l  #keyint,$68.w       ; install lvl2 handler (cia-a)
     move.l  #vblankint,$6C.w    ; install lvl3 handler
     move.l  #timerint,$78.w     ; install lvl6 handler (cia-b)
-    move.w  #$E028,_INTENA      ; enable lvl2/3/6
     move.b  #$88,CIAICR(a5)     ; enable CIA-A SP interrupt (keyboard)
     move.b  #$82,CIAICR(a6)     ; enable CIA-B TB interrupt
-;   waitr   a1,d0,d1,d2
+    move.w  #$E028,_INTENA      ; enable lvl2/3/6
+    waitr   a1,d0,d1,d2
     bset.b  #0,CIACRB(a6)       ; start CIA-B TB
     move.w  _COPJMP1,d0         ; start copper
     move.w  #$8000,_ADKCON      ; clear mod bits
@@ -232,19 +232,19 @@ init:
     move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
 .end:
     movem.l (sp)+,d1-d2         ; pop saved copper,view
-    movem.l (sp)+,d3-d4         ; pop CIA-A regs
+    movem.l (sp)+,d3-d6         ; pop CIA-A regs
     IFND DEBUG
     or.b    #$80,d3             ; write bit
     move.b  d3,CIACRA(a5)
     or.b    #$80,d4
     move.b  d4,CIAICR(a5)
+    move.b  d5,CIATBLO(a5)
+    move.b  d6,CIATBHI(a5)
     ENDC
-    movem.l (sp)+,d3-d6         ; pop CIA-B timer regs
+    movem.l (sp)+,d5-d6         ; pop CIA-B timer regs
     IFND DEBUG
-    move.b  d3,CIATBLO(a6)
-    move.b  d4,CIATBHI(a6)
-    move.b  d5,CIATALO(a6)
-    move.b  d6,CIATAHI(a6)
+    move.b  d5,CIATBLO(a6)
+    move.b  d6,CIATBHI(a6)
     ENDC
     movem.l (sp)+,d3-d5         ; pop CIA-B control regs
     IFND DEBUG
@@ -310,26 +310,54 @@ keyint:
     lsr.b   #1,d6
     bcs     .handshake
     and.w   #$7F,d6             ; test key value
-    cmp.b   #$40,d6 
-    beq.b   .space
+    cmp.b   #$30,d6 
+    bge     .row3
     cmp.b   #$20,d6
-    bge.b   .row2
+    bge     .row2
     cmp.b   #$10,d6
-    bge.b   .row1
+    bge     .row1
     bra     .handshake
-.space:
+.row3:
     lea     state,a1
-    move.w  pos,d6              ; get current position
-    lsl.w   #stwidthlog,d6      ; ..
+    and.w   #$03,d6
+    cmp.b   #0,d6
+    beq     .handshake
+    cmp.b   #2,d6
+    bgt     .handshake
+    move.w  pos,d4              ; get current position
+    lsl.w   #stwidthlog,d4      ; ..
     move.w  #(ncells/4)-1,d5    ; loop counter
 .clear:
-    clr.l   (a1,d6.w)
-    addq    #4,d6
+    clr.l   (a1,d4.w)
+    addq    #4,d4
     dbra    d5,.clear
-    move.w  pos,d6              ; get current position
-    lsl.w   #stwidthlog,d6      ; ..
-    add.w   #(ncells/2),d6
-    move.b  #1,(a1,d6.w)
+    cmp.b   #1,d6
+    beq.b   .reset1
+.resetrand:
+    move.w  _VPOSR,d6
+    move.w  _VHPOSR,d5
+    not.w   d5
+    eor.w   d5,d6
+    move.w  pos,d4              ; get current position
+    lsl.w   #stwidthlog,d4      ; ..
+    move.w  #ncells-1,d5        ; loop counter
+.randloop:
+    btst    #0,d6
+    beq.b   .lpz
+    move.b  #1,(a1,d4.w)
+    bra     .endrand
+.lpz:
+    move.b  #0,(a1,d4.w)
+.endrand:
+    addq    #1,d4
+    lsr.w   #1,d6
+    dbra    d5,.randloop
+    bra     .handshake
+.reset1:
+    move.w  pos,d4              ; get current position
+    lsl.w   #stwidthlog,d4      ; ..
+    add.w   #(ncells/2),d4
+    move.b  #1,(a1,d4.w)
     bra     .handshake
 .row1:
     lea     seqdec,a1
