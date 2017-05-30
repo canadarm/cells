@@ -22,6 +22,7 @@ bplwidthl   equ bplwidth/4      ; width in dwords
 ;-----state defs-----------
 ncellslog   equ 5
 ncells      equ (1<<ncellslog)  ; cell count
+ncellsl     equ (ncells/4)      ; cell count (dwords)
 csizelog    equ 3               ; log2(csize)
 csize       equ (1<<csizelog)   ; cell size (bits)
 csizeb      equ (csize/8)       ; cell size (bytes)
@@ -33,18 +34,30 @@ stwidthw    equ stwidth/2       ; state size in words
 stwidthl    equ stwidth/4       ; state size in dwords
 stsize      equ stwidth*nstates ; total state size
 stsizel     equ stsize/4        ; total state size in dwords
-wsize       equ 8               ; window size (rows)
-ncols       equ 4               ; number of columns for metrics
+wsizelog    equ 3               ; log2(wsize)
+wsize       equ (1<<wsizelog)   ; window size (rows)
+hsize       equ (ncells*wsize)  ; history window size
+hsizel      equ (hsize/4)       ; history window size in dwords
+ncolslog    equ 1               ; log2(ncols)
+ncols       equ (1<<ncolslog)   ; number of columns for metrics
+colsize     equ (ncells>>ncolslog)
+colsizel    equ (colsize/4)
 
 ;-----flag bits------------
 F_DRAW      equ 0               ; render next vblank
 M_DRAW      equ (1<<F_DRAW)     
+F_KEY       equ 1               ; key pressed
+M_KEY       equ (1<<F_KEY)
+F_UPDATE    equ 2
+M_UPDATE    equ (1<<F_UPDATE)   ; update next iteration
 
 ;-----buffer defs----------
-bsize       equ stwidth*csize   ; render buffer size
-bsizel      equ bsize/4         ; render buffer size in dwords
+bsize       equ stwidth*csize           ; render buffer size
+bsizel      equ bsize/4                 ; render buffer size in dwords
 coff        equ (bplwidth-stwidth)/2    ; offset of cell display in bytes
 coffw       equ (bplwidthw-stwidthw)/2  ; offset of cell display in words
+kbsizelog   equ 3                       ; keyboard buffer size log 2
+kbsize      equ (1<<kbsizelog)          ; keyboard buffer size
 
 ;-----timing defs----------
 ; one tick = 1.396825ms (clock interval is 279.365 nanoseconds)
@@ -53,7 +66,7 @@ coffw       equ (bplwidthw-stwidthw)/2  ; offset of cell display in words
 ; 120 bpm = 32dq/s ~ 22371 (NTSC)
 ; 60hz ~ 11934 (NTSC)
 period      equ 14800           ; timer interrupt period
-kbhs        equ 65              ; keyboard handshake duration - 02 clocks
+kbhs        equ 95              ; keyboard handshake duration - 02 clocks
 
 ;-----entry point----------
 ; most of the CIA saving is trying
@@ -120,6 +133,11 @@ init:
 .initstate:
     clr.l   (a0)+
     dbra    d0,.initstate
+    lea     hist,a0             ; history buffer address
+    move.l  #hsizel*2-1,d0      ; loop counter
+.inithist:  
+    clr.l   (a0)+
+    dbra    d0,.inithist
     lea     bgpl,a0             ; bitplane address
     move.l  #bplsizel*2-1,d0    ; loop counter
 .initbpl:
@@ -218,6 +236,15 @@ init:
 
 ;-----frame loop start-------
 .mainloop:
+    btst    #F_KEY,flags
+    beq     .nokey
+    jsr     handlekb 
+.nokey:
+    btst    #F_UPDATE,flags
+    beq     .noupdate
+    jsr     update
+    bclr    #F_UPDATE,flags
+.noupdate:
 .endmain:
     btst    #6,$bfe001
     bne     .mainloop
@@ -290,7 +317,10 @@ init:
     IFND DEBUG
     jsr     -132(a6)            ; permit MT
     ENDC
+.return:
     movem.l (sp)+,d1-d6/a0-a6
+    move.l  oncount,d0
+    move.l  xoncount,d1
     rts
 
 ;------interrupts----------
@@ -310,65 +340,8 @@ keyint:
     lsr.b   #1,d6
     bcs     .handshake
     and.w   #$7F,d6             ; test key value
-    cmp.b   #$30,d6 
-    bge     .row3
-    cmp.b   #$20,d6
-    bge     .row2
-    cmp.b   #$10,d6
-    bge     .row1
-    bra     .handshake
-.row3:
-    lea     state,a1
-    and.w   #$03,d6
-    cmp.b   #0,d6
-    beq     .handshake
-    cmp.b   #2,d6
-    bgt     .handshake
-    move.w  pos,d4              ; get current position
-    lsl.w   #stwidthlog,d4      ; ..
-    move.w  #(ncells/4)-1,d5    ; loop counter
-.clear:
-    clr.l   (a1,d4.w)
-    addq    #4,d4
-    dbra    d5,.clear
-    cmp.b   #1,d6
-    beq.b   .reset1
-.resetrand:
-    move.w  _VPOSR,d6
-    move.w  _VHPOSR,d5
-    not.w   d5
-    eor.w   d5,d6
-    move.w  pos,d4              ; get current position
-    lsl.w   #stwidthlog,d4      ; ..
-    move.w  #ncells-1,d5        ; loop counter
-.randloop:
-    btst    #0,d6
-    beq.b   .lpz
-    move.b  #1,(a1,d4.w)
-    bra     .endrand
-.lpz:
-    move.b  #0,(a1,d4.w)
-.endrand:
-    addq    #1,d4
-    lsr.w   #1,d6
-    dbra    d5,.randloop
-    bra     .handshake
-.reset1:
-    move.w  pos,d4              ; get current position
-    lsl.w   #stwidthlog,d4      ; ..
-    add.w   #(ncells/2),d4
-    move.b  #1,(a1,d4.w)
-    bra     .handshake
-.row1:
-    lea     seqdec,a1
-    and.w   #$03,d6
-    sub.b   #1,(a1,d6.w)
-    bra     .handshake
-.row2:
-    lea     seqdec,a1
-    and.w   #$03,d6
-    add.b   #1,(a1,d6.w)
-    bra     .handshake
+    move.w  d6,key
+    bset    #F_KEY,flags 
 .handshake:
     moveq   #2,d6               ; busy wait for timer underflow
     and.b   CIAICR(a0),d6
@@ -462,11 +435,14 @@ timerint:
     bne.b   .done
     jsr     nextstate
     jsr     playseq
+    bset    #F_UPDATE,flags
 .done 
 .exit:
     move.w  #$6000,_INTREQ      ; clear INTREQ
     move.w  #$6000,_INTREQ      ; ... twice
     movem.l (sp)+,d1-d6/a0-a6
+    move.w  oncount,d0
+    move.w  xoncount,d1
     rte
 
 ;-----tables---------------
@@ -497,14 +473,16 @@ oncount:
     ds.b    ncols               ; count of set bits by column
 xoncount:
     ds.b    ncols               ; count of changes by column
-ctr:
-    dc.l    0
-ctr2:
-    dc.l    0
+key:
+    dc.w    0                   ; last keypress
+popcnt:
+    dc.b    0,1,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 1,2  
+    EVEN
 cpos:
     dc.b    0                   ; scroll position mod 8
-key:
-    dc.b    0                   ; last key press
+    EVEN
+stmp:
+    dc.b    0                   ;               
 
 ;------saves/system--------
     EVEN
@@ -523,6 +501,14 @@ gfxname:
     CNOP    0,4
 state:
     ds.b    stsize
+hist:
+    ds.b    hsize
+xhist:
+    ds.b    hsize
+hbuf:
+    ds.b    ncells
+xhbuf:
+    ds.b    ncells
 
 ;-----sequencer data--------
     CNOP    0,4
@@ -584,13 +570,57 @@ cbuf:
 ;-----functions------------
     SECTION amc,CODE
 
-;-----nextstate------------
+;-----update()-------------
+; Update sequence metrics.
+; uses a0-a3,d1-d6
+    CNOP    0,4
+update:
+    lea     hist,a0
+    lea     hbuf,a1
+    lea     popcnt,a2
+    lea     oncount,a3
+    move.w  #ncols-1,d6       ; outer loop over columns
+.outer:
+    move.w  #colsizel-1,d5    ; inner loop over words 
+.inner:
+    move.l  hsize(a0),d0      ; xhistory word
+    move.l  ncells(a1),d1     ; xbuf word
+    move.b  (a4,d1.w),d2      ; popcnt hist high
+    swap    d1
+    move.b  (a4,d1.w),d3      ; popcnt hist low
+    add.b   d2,d3             ; popcnt hist
+    move.b  (a4,d1.w),d2      ; popcnt buf high
+    swap    d1
+    move.b  (a4,d1.w),d4      ; popcnt buf low
+    add.b   d4,d2             ; popcnt buf
+    sub.b   d3,d2             ; total change
+    move.b  d2,ncols(a3)      ; store new col value
+    move.l  (a0)+,d0          ; history word
+    move.l  (a1)+,d1          ; buf word
+    move.b  (a4,d1.w),d2      ; popcnt hist high
+    swap    d1
+    move.b  (a4,d1.w),d3      ; popcnt hist low
+    add.b   d2,d3             ; popcnt hist
+    move.b  (a4,d1.w),d2      ; popcnt buf high
+    swap    d1
+    move.b  (a4,d1.w),d4      ; popcnt buf low
+    add.b   d4,d2             ; popcnt buf
+    sub.b   d3,d2             ; total change
+    add.b   d2,(a3)           ; store new col value
+    dbra    d5,.inner
+    addq    #1,a3             ; advance column
+    dbra    d6,.outer
+    rts 
+    
+;-----nextstate()----------
 ; Compute next cell state.
-; uses a0-a2,d0-d4
+; uses a0-a2,d0-d6
     CNOP    0,4
 nextstate:
     lea     state,a0          ; state address
     move.l  a0,a1
+    lea     hbuf,a2           ; history buffer address
+    lea     xhbuf,a3  
     move.w  rule,d3           ; rule
     clr.l   d0
     move.w  pos,d0            ; current position 
@@ -606,25 +636,35 @@ nextstate:
     lsl.b   #2,d0
     or.b    d0,d4             ; add to buffer
     move.b  (a0)+,d0          ; s
-    move.b  d0,d2             ; save first in d2
+    move.b  d0,d6             ; save first element in d6
     lsl.b   #1,d0
     or.b    d0,d4             ; add to buffer
+    move.b  d4,d2             ; previous buffer in d2
     move.w  #ncells-1,d0      ; loop counter
 .stloop:
     move.b  (a0)+,d1          ; next
-    or.b    d1,d4     
+    or.b    d1,d4 
     move    d3,d1             ; check rule bit
     lsr.b   d4,d1
     and.b   #1,d1
-    move.b  d1,(a1)+          ; store new state
     lsl.b   #1,d4             ; advance bits
     and.b   #7,d4
+    move.b  d1,(a1)+          ; store new state
+    move.b  d1,(a2)+          ; save in hist
+    eor.b   d2,d1             ; compute xor with prev
+    and.b   #1,d1
+    move.b  d1,(a3)+          ; save in xhist
+    move.b  d4,d2             ; previous buffer in d2
     dbra    d0,.stloop
-    or.b    d2,d4             ; last
+    or.b    d6,d4             ; last
     move    d3,d1             ; check rule bit
     lsr.b   d4,d1
     and.b   #1,d1
     move.b  d1,(a1)           ; store new state
+    move.b  d1,(a2)
+    eor.b   d2,d1             ; xor with prev
+    and.b   #1,d1
+    move.b  d1,(a3)
     rts
 
 ;-----drawstate(d0)--------
@@ -759,6 +799,65 @@ playseq:
     addq    #1,a3             ; ""
     add.l   #SQLEN,a5         ; ""
     dbra    d6,.loop
+    rts
+
+;-----handlekb()------------
+; Process the key buffer.
+    CNOP    0,4
+handlekb:
+    move.w  key,d6
+    cmp.b   #$30,d6 
+    bge.b   .row3
+    cmp.b   #$20,d6
+    bge.b   .row2
+    cmp.b   #$10,d6
+    bge.b   .row1
+    bra     .done
+.row1:
+    lea     seqdec,a1
+    and.w   #$03,d6
+    sub.b   #1,(a1,d6.w)
+    bra     .done
+.row2:
+    lea     seqdec,a1
+    and.w   #$03,d6
+    add.b   #1,(a1,d6.w)
+    bra     .done
+.row3:
+    lea     state,a1
+    and.w   #$03,d6
+    cmp.b   #0,d6
+    beq     .done
+    cmp.b   #2,d6
+    bgt     .done
+    move.w  pos,d4              ; get current position
+    lsl.w   #stwidthlog,d4      ; ..
+    move.w  #(ncells/4)-1,d5    ; loop counter
+.clear:
+    clr.l   (a1,d4.w)
+    addq    #4,d4
+    dbra    d5,.clear
+    cmp.b   #1,d6
+    beq.b   .reset1
+.resetrand:
+    move.w  pos,d4              ; get current position
+    lsl.w   #stwidthlog,d4      ; ..
+    move.w  #ncells-1,d5        ; loop counter
+.randloop:
+    move.b  _VHPOSR,d6
+    and.w   #2,d6
+    move.b  d6,(a1,d4.w)
+    addq    #1,d4
+    dbra    d5,.randloop
+    bra     .done
+.reset1:
+    move.w  pos,d4              ; get current position
+    lsl.w   #stwidthlog,d4      ; ..
+    add.w   #(ncells/2),d4
+    move.b  #1,(a1,d4.w)
+    bra     .done
+.done:
+    bclr    #F_KEY,flags
     rts
 
 ;------------------------------------------------------------------------------
