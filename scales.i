@@ -1,6 +1,6 @@
 seqlenlog   equ 3
 seqlen      equ (1<<seqlenlog)    ; seq max length in bytes 
-seqcnt      equ 7                 ; number of modes
+seqcnt      equ 6                 ; number of modes
 scalecnt    equ 6                 ; number of scales/leads
 modelenlog  equ (seqlenlog+2)     ; mode block size (log)
 modelen     equ (1<<modelenlog)
@@ -12,16 +12,16 @@ root:
     dc.b    0
     CNOP    0,4
 modes:
+modep:
+    dc.b    0,7,0,5,-7,7,0,-5
+    dc.b    0,-5,5,7,0,12,0,7
+    dc.b    12,5,7,7,0,7,5,12 
+    dc.b    12,5,7,12,5,0,7,12
 mode1:
     dc.b    0,4,7,5,0,7,4,0
     dc.b    7,10,5,7,4,12,10,7
     dc.b    12,12,7,10,7,0,7,4
     dc.b    10,10,5,7,12,5,4,7
-mode2:
-    dc.b    0,7,0,5,-7,7,0,-5
-    dc.b    0,-5,5,7,0,12,0,7
-    dc.b    12,5,7,7,0,7,5,12 
-    dc.b    12,5,7,12,5,0,7,12
 mode3:
     dc.b    0,7,-5,5,3,7,9,-5
     dc.b    0,7,-5,5,3,7,9,-5

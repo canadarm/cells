@@ -38,6 +38,7 @@ wsizelog    equ 3               ; log2(wsize)
 wsize       equ (1<<wsizelog)   ; window size (rows)
 hsize       equ (ncells*wsize)  ; history window size
 hsizel      equ (hsize/4)       ; history window size in dwords
+hsizemod    equ (hsize-1)
 ncolslog    equ 1               ; log2(ncols)
 ncols       equ (1<<ncolslog)   ; number of columns for metrics
 colsize     equ (ncells>>ncolslog)
@@ -50,6 +51,12 @@ F_KEY       equ 1               ; key pressed
 M_KEY       equ (1<<F_KEY)
 F_UPDATE    equ 2
 M_UPDATE    equ (1<<F_UPDATE)   ; update next iteration
+F_COLOR     equ 3
+M_COLOR     equ (1<<F_COLOR)    ; do color rotation
+F_MOD       equ 4
+M_MOD       equ (1<<F_MOD)      ; do modulation step
+F_TRANSP    equ 5
+M_TRANSP    equ (1<<F_TRANSP)   ; do transposition
 
 ;-----buffer defs----------
 bsize       equ stwidth*csize           ; render buffer size
@@ -58,6 +65,15 @@ coff        equ (bplwidth-stwidth)/2    ; offset of cell display in bytes
 coffw       equ (bplwidthw-stwidthw)/2  ; offset of cell display in words
 kbsizelog   equ 3                       ; keyboard buffer size log 2
 kbsize      equ (1<<kbsizelog)          ; keyboard buffer size
+
+;-----color defs-----------
+fgbase      equ $0555
+bgmax       equ $0333
+
+;-----sequence defs--------
+modesw      equ 64                      ; 16th notes between mode transition
+F_ASC       equ 0                       ; ascending flag
+F_PERF      equ 1                       ; move to perfect flag
 
 ;-----timing defs----------
 ; one tick = 1.396825ms (clock interval is 279.365 nanoseconds)
@@ -171,6 +187,11 @@ init:
 .inittrig:
     move.b  #1,(a0)+
     dbra    d4,.inittrig
+    lea     seqmode,a0
+    move.w  #ncols-1,d4
+.initmode:
+    move.l  #0,(a0)+
+    dbra    d4,.initmode
     lea     seql,a0
     move.w  #ncols-1,d4
 .initlen:
@@ -243,8 +264,11 @@ init:
     btst    #F_UPDATE,flags
     beq     .noupdate
     jsr     update
-    bclr    #F_UPDATE,flags
 .noupdate:
+    btst    #F_MOD,flags
+    beq     .nomod
+    jsr     modulate
+.nomod:
 .endmain:
     btst    #6,$bfe001
     bne     .mainloop
@@ -319,8 +343,6 @@ init:
     ENDC
 .return:
     movem.l (sp)+,d1-d6/a0-a6
-    move.l  oncount,d0
-    move.l  xoncount,d1
     rts
 
 ;------interrupts----------
@@ -408,6 +430,10 @@ vblankint:
     add.l   #AUDOFFSET,a1       ; next channel
     addq    #1,a0               ; next track
     dbra    d4,.loop 
+    btst    #F_COLOR,flags
+    beq     .exit
+    bsr     colormod
+    bclr    #F_COLOR,flags
 .exit:
     move.w  #$4020,_INTREQ      ; clear INTREQ
     move.w  #$4020,_INTREQ      ; ... twice
@@ -422,6 +448,12 @@ timerint:
     move.l  #CIAB,a0            ; CIA-B base
     btst    #1,CIAICR(a0)
     beq     .exit
+    add.b   #1,count
+    cmp.b   #modesw,count
+    bne     .nomod
+    clr.b   count
+    bset    #F_MOD,flags        ; reset count and modulate
+.nomod:
     move.b  cpos,d0             ; increment mod position
     addq    #1,d0
     cmp.b   #(csize/2),d0       ; if halfway, request render
@@ -436,13 +468,12 @@ timerint:
     jsr     nextstate
     jsr     playseq
     bset    #F_UPDATE,flags
+;   bset    #F_COLOR,flags
 .done 
 .exit:
     move.w  #$6000,_INTREQ      ; clear INTREQ
     move.w  #$6000,_INTREQ      ; ... twice
     movem.l (sp)+,d1-d6/a0-a6
-    move.w  oncount,d0
-    move.w  xoncount,d1
     rte
 
 ;-----tables---------------
@@ -450,9 +481,13 @@ timerint:
     INCLUDE "tabsaw.i"
     INCLUDE "scales.i"
 
-    SECTION amd,DATA
 ;------locals--------------
+    SECTION amd,DATA
     EVEN
+fgcol:
+    dc.w    0                   ; foreground color mod
+bgcol:
+    dc.w    0                   ; background color mod
 pos:
     dc.w    0                   ; state position
 drawpos:
@@ -480,11 +515,14 @@ popcnt:
     EVEN
 cpos:
     dc.b    0                   ; scroll position mod 8
+count:
+    dc.b    0                   ; step counter
     EVEN
 stmp:
     dc.b    0                   ;               
 
 ;------saves/system--------
+    SECTION amd,DATA
     EVEN
 savelvl2:
     dc.l    0                   ; saved lvl2 handler
@@ -513,32 +551,38 @@ xhbuf:
 ;-----sequencer data--------
     CNOP    0,4
 seq:
-    ds.w    seqlen*ncols        ; sequence note lists
-seqtrig:
-    ds.b    seqlen*ncols        ; sequence enable bits
+    ds.w    seqlen*2            ; sequence note lists
+seqstate:
+seqnote:
+    ds.b    4                   ; current notes
+seqlvl: 
+    ds.b    4                   ; current volumes
+envmode:
+    ds.b    4                   ; envelope states
 seqparms:
-seqp:
-    ds.b    ncols               ; sequence position
-seql:
-    ds.b    ncols               ; length of seqs
-seqoct:
-    ds.b    ncols               ; octaves
-seqctl:
-seqenv:
-    ds.b    ncols               ; envelopes
 seqatt:
-    ds.b    ncols               ; decay
+    ds.b    2                   ; attack
 seqdec:
-    ds.b    ncols               ; decay
+    ds.b    2                   ; decay
+seqsus:
+    ds.b    2                   ; sustain
+seqrel:
+    ds.b    2                   ; sustain
+seqoct:
+    ds.b    2                   ; octave
+seqmod:
+    ds.b    2                   ; modulation position
 
 ;-----sequencer addressing----
-SQLEN       equ     (seqlen*2)          ; seq length (bytes)
-SQP         equ     (seqp-seqparms)     ; seqp offset
-SQL         equ     (seql-seqparms)     ; seql offset
-SQV         equ     (seqoct-seqparms)   ; seqoct offset
-SQE         equ     (seqenv-seqctl)
-SQA         equ     (seqatt-seqctl)
-SQD         equ     (seqdec-seqctl)
+SQN         equ     (seqnote-seqstate)
+SQE         equ     (envmode-seqstate)
+SQL         equ     (seqlvl-seqstate)
+SQA         equ     (seqatt-seqparms)
+SQD         equ     (seqdec-seqparms)
+SQS         equ     (seqsus-seqparms)
+SQR         equ     (seqrel-seqparms)
+SQV         equ     (seqoct-seqparms)
+SQM         equ     (seqmod-seqparms)
 
 ;-----copper lists---------
     SECTION amdc,DATA_C
@@ -610,6 +654,7 @@ update:
     dbra    d5,.inner
     addq    #1,a3             ; advance column
     dbra    d6,.outer
+    blcr    #F_UPDATE,flags   ; clear flag
     rts 
     
 ;-----nextstate()----------
@@ -677,9 +722,9 @@ drawstate:
     lea     state,a0          ; compute state addr
     lsl.w   #stwidthlog,d0
     add.l   d0,a0
-    lea     cbuf,a1           ; cell ptr
+    lea     stwidth+cbuf,a1   ; cell ptr
     move.w  #ncells-1,d0      ; loop counter
-    move.l  #$FF000000,d1     ; bit pattern
+    move.l  #$7E000000,d1     ; bit pattern
     clr.l   d2                ; current word
 .drawloop:
     move.b  (a0)+,d3          ; current cell
@@ -689,14 +734,14 @@ drawstate:
 .off: 
     lsr.l   #csize,d1         ; advance bit
     bne     .nxt
-    move.l  #$FF000000,d1     ; reset pattern
+    move.l  #$7E000000,d1     ; reset pattern
     move.l  d2,(a1)+          ; store word
     clr.l   d2                ; clear current word
 .nxt:
     dbra    d0,.drawloop
-    move.w  #csize-2,d1       ; outer loop counter
+    move.w  #csize-3,d1       ; outer loop counter
 .copyout:
-    lea     cbuf,a0
+    lea     stwidth+cbuf,a0
     move.w  #stwidthl-1,d0    ; inner loop counter
 .copyloop:
     move.l  (a0)+,d2          ; copy by dwords
@@ -858,6 +903,24 @@ handlekb:
     bra     .done
 .done:
     bclr    #F_KEY,flags
+    rts
+
+;-----colormod()-----------
+; modulate colors.
+; uses d5,d6
+    CNOP    0,4
+colormod:
+    move.w  fgcol,d5
+    move.w  bgcol,d6
+    add.w   #$0001,d5 
+    move.w  d5,fgcol
+    add.w   #fgbase,d5
+    and.w   #$FFF,d5
+    move.w  d5,_COLOR01 
+    add.w   #$0011,d6 
+    move.w  d6,bgcol
+    and.w   #bgmax,d6
+    move.w  d6,_COLOR00
     rts
 
 ;------------------------------------------------------------------------------
