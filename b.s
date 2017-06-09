@@ -190,7 +190,9 @@ init:
     move.b  #$FF,(a3)+
     dbra    d6,.patlp
     jsr     match
-;   jsr     findmatch
+    jsr     findmatch
+    move.w  d0,mx0
+    move.w  d1,mx1
 
 ;-----frame loop start-------
 ;.mainloop:
@@ -272,6 +274,7 @@ init:
     movem.l (sp)+,d1-d6/a0-a6
     move.l  mbits0,d0
     move.l  mbits1,d1
+    move.l  mx0,d2
     rts
 
 ;------interrupts----------
@@ -379,7 +382,11 @@ mask1:
 mbits0:
     dc.l    0                   ; match mask 0
 mbits1:
-    ds.l    0                   ; match masks 1
+    dc.l    0                   ; match masks 1
+mx0:
+    dc.w    0
+mx1:
+    dc.w    0
 
 ;-----copper lists---------
     SECTION amdc,DATA_C
@@ -474,11 +481,13 @@ matchdown:
     ; here d6 is is the number of rotate rights done
     ; the match position is (24 - d6) % 32
     neg.w   d6
-    add.w   #24,d6
+    add.w   #56,d6
     and.w   #$1F,d6
     lea     mbits0,a2           ; get match base
     lsl.w   #2,d3               ; match offset (0,1)
-    bset    d6,(a2,d3.w)        ; set match bit
+    move.l  #1,d0
+    lsl.l   d6,d0
+    or.l    d0,(a2,d3.w)        ; set match bit
 .exit:
     movem.l (sp)+,d3-d6         ; restore regs
     rts    
@@ -495,9 +504,9 @@ findmatch:
     clr.l   d1
 .loop0:
     btst    d5,mbits0
-    beq     .down0
+    bne     .down0
     btst    d6,mbits0
-    beq     .up0
+    bne     .up0
     add.b   #1,d6
     dbra    d5,.loop0
     bra     .next
@@ -513,9 +522,9 @@ findmatch:
     move.b  #16,d6              ; up counter 
 .loop1:
     btst    d5,mbits1
-    beq     .down1
+    bne     .down1
     btst    d6,mbits1
-    beq     .up1
+    bne     .up1
     add.b   #1,d6
     dbra    d5,.loop1
     bra     .done
