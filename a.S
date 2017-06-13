@@ -7,7 +7,6 @@
     INCLUDE "exec/nodes.i"
 ;-----macro defs-----------
 ;DEBUG       SET 1
-;FIXME: keys work but hangs after return to asmone!
 
 ;-----screen defs----------
 width       equ 320             ; plane width
@@ -39,24 +38,20 @@ wsize       equ (1<<wsizelog)   ; window size (rows)
 hsize       equ (ncells*wsize)  ; history window size
 hsizel      equ (hsize/4)       ; history window size in dwords
 hsizemod    equ (hsize-1)
-ncolslog    equ 1               ; log2(ncols)
+ncolslog    equ 2               ; log2(ncols)
 ncols       equ (1<<ncolslog)   ; number of columns for metrics
 colsize     equ (ncells>>ncolslog)
 colsizel    equ (colsize/4)
 
 ;-----flag bits------------
 F_DRAW      equ 0               ; render next vblank
-M_DRAW      equ (1<<F_DRAW)     
 F_KEY       equ 1               ; key pressed
-M_KEY       equ (1<<F_KEY)
-F_UPDATE    equ 2
-M_UPDATE    equ (1<<F_UPDATE)   ; update next iteration
-F_COLOR     equ 3
-M_COLOR     equ (1<<F_COLOR)    ; do color rotation
-F_MOD       equ 4
-M_MOD       equ (1<<F_MOD)      ; do modulation step
-F_TRANSP    equ 5
-M_TRANSP    equ (1<<F_TRANSP)   ; do transposition
+F_UPDATE    equ 2               ; update sequence parms
+F_COLOR     equ 3               ; modulate color
+F_MOD       equ 4               ; modulate sequence
+F_TRANSP    equ 5               ; transpose root
+F_CLOCK16   equ 6               ; 16 tick event
+F_CLOCK8    equ 7               ; 8 tick event
 
 ;-----buffer defs----------
 bsize       equ stwidth*csize           ; render buffer size
@@ -71,7 +66,7 @@ fgbase      equ $0555
 bgmax       equ $0333
 
 ;-----sequence defs--------
-modesw      equ 64                      ; 16th notes between mode transition
+countmod    equ 64                      ; 16th notes between mode transition
 F_ASC       equ 0                       ; ascending flag
 F_PERF      equ 1                       ; move to perfect flag
 
@@ -174,36 +169,33 @@ init:
     move.l  #width,bplpos
 
 ;-----init sequence--------
-    lea     seqoct,a0
-    move.w  #ncols-1,d4
-.initoct:
-    move.b  d4,d3
-    and.b   #1,d3
-    add.b   #1,d3
-    move.b  d3,(a0)+
-    dbra    d4,.initoct
     lea     seqtrig,a0
     move.w  #(seqlen*ncols-1),d4
 .inittrig:
     move.b  #1,(a0)+
     dbra    d4,.inittrig
-    lea     seqmode,a0
+    lea     seqlvl,a0
+    lea     seql,a1
+    lea     seqdec,a2
+    lea     seqoct,a3
+    lea     seqmod,a4
+    lea     seqpos,a5
+    lea     seqvol,a6
     move.w  #ncols-1,d4
-.initmode:
-    move.l  #0,(a0)+
-    dbra    d4,.initmode
-    lea     seql,a0
-    move.w  #ncols-1,d4
-.initlen:
-    move.b  #seqlen,(a0)+
-    dbra    d4,.initlen 
-    lea     seqdec,a0
-    move.w  #ncols-1,d4
-.initdec:
-    move.b  #12,(a0)+
-    dbra    d4,.initdec
-    move.l  #1,d0
-    jsr     mkseq
+.initseq:
+    move.b  #0,(a0)+            ; level
+    move.b  #seqlen,(a1)+       ; length
+    move.b  #07,(a2)+           ; decay
+    move.b  #0,(a4)+            ; mod
+    move.b  #0,(a5)+            ; position
+    move.b  #64,(a6)+           ; volume
+    move.b  d4,d3
+    and.b   #1,d3
+    add.b   #1,d3
+    move.b  d3,(a3)+            ; octave
+    dbra    d4,.initseq
+    clr.w   d0
+    jsr     mkseq               ; init sequences
 
 ;-----other init-----------
     clr.b   key
@@ -263,11 +255,16 @@ init:
 .nokey:
     btst    #F_UPDATE,flags
     beq     .noupdate
-    jsr     update
+;   jsr     pack
+;   jsr     writepp
+    jsr     playseq
+;   jsr     update
+    add.w   #1,stmp
+    bclr    #F_UPDATE,flags
 .noupdate:
     btst    #F_MOD,flags
     beq     .nomod
-    jsr     modulate
+;   jsr     modulate
 .nomod:
 .endmain:
     btst    #6,$bfe001
@@ -343,6 +340,7 @@ init:
     ENDC
 .return:
     movem.l (sp)+,d1-d6/a0-a6
+    move.w  stmp,d0
     rts
 
 ;------interrupts----------
@@ -399,7 +397,7 @@ vblankint:
     addmod  d4,width,bplsize    ; increment
     move.l  d4,copypos
     lea     cbuf,a0             ; source address
-    bsr     copystate
+    jsr     copystate
 .nocopy: 
     move.w  drawpos,d0          ; state position
     bsr     drawstate           ; copy state
@@ -411,28 +409,29 @@ vblankint:
     addmod  d4,width,bplsize    ; increment
     move.l  d4,bplpos
     lea     cbuf,a0             ; source address
-    bsr     copystate           ; render new state
+    jsr     copystate           ; render new state
 .nodraw:
-    lea     seqctl,a0           ; envelope state
+    lea     seqstate,a0         ; envelope state
     move.l  #_AUD0LC,a1         ; audio ptr
+    lea     seqparms,a2
     clr.l   d3                  ; zero volume reg
     move.w  #ncols-1,d4         ; loop counter
 .loop:
-    move.b  SQE(a0),d3          ; volume amount
-    move.b  SQD(a0),d2          ; decay amount
+    move.b  SQL(a0),d3          ; volume amount
+    move.b  SQD(a2),d2          ; decay amount
     sub.b   d2,d3
     cmp.b   #0,d3
     bgt.b   .pos
     clr.l   d3
 .pos
-    move.b  d3,SQE(a0)          ; update env
+    move.b  d3,SQL(a0)          ; update env
     move.w  d3,8(a1)            ; set volume
     add.l   #AUDOFFSET,a1       ; next channel
     addq    #1,a0               ; next track
     dbra    d4,.loop 
     btst    #F_COLOR,flags
     beq     .exit
-    bsr     colormod
+    jsr     colormod
     bclr    #F_COLOR,flags
 .exit:
     move.w  #$4020,_INTREQ      ; clear INTREQ
@@ -448,12 +447,23 @@ timerint:
     move.l  #CIAB,a0            ; CIA-B base
     btst    #1,CIAICR(a0)
     beq     .exit
-    add.b   #1,count
-    cmp.b   #modesw,count
+    add.b   #1,count            ; increment count mod countmod
+    cmp.b   #countmod,count     ; check for mod divider
     bne     .nomod
     clr.b   count
     bset    #F_MOD,flags        ; reset count and modulate
 .nomod:
+    move.b  count,d0            ; check counter modulo
+    and.b   #$0F,d0             ; 16th note
+    cmp.b   #0,d0
+    bne.b   .no16
+    bset    #F_CLOCK16,flags
+.no16:
+    and.b   #$07,d0
+    cmp.b   #0,d0
+    beq.b   .no8
+    bset    #F_CLOCK8,flags
+.no8:
     move.b  cpos,d0             ; increment mod position
     addq    #1,d0
     cmp.b   #(csize/2),d0       ; if halfway, request render
@@ -465,10 +475,8 @@ timerint:
     move.b  d0,cpos
     cmp.b   #0,d0
     bne.b   .done
-    jsr     nextstate
-    jsr     playseq
+    bsr     nextstate
     bset    #F_UPDATE,flags
-;   bset    #F_COLOR,flags
 .done 
 .exit:
     move.w  #$6000,_INTREQ      ; clear INTREQ
@@ -492,6 +500,8 @@ pos:
     dc.w    0                   ; state position
 drawpos:
     dc.w    0                   ; render positon
+hpos:
+    dc.w    0                   ; history position
 copypos:
     dc.l    0                   ; bitplane offset for copy
 bplpos:
@@ -508,6 +518,8 @@ oncount:
     ds.b    ncols               ; count of set bits by column
 xoncount:
     ds.b    ncols               ; count of changes by column
+maj:
+    ds.b    ncells              ; count by individual columns
 key:
     dc.w    0                   ; last keypress
 popcnt:
@@ -519,7 +531,7 @@ count:
     dc.b    0                   ; step counter
     EVEN
 stmp:
-    dc.b    0                   ;               
+    dc.w    0                   ; debug
 
 ;------saves/system--------
     SECTION amd,DATA
@@ -547,41 +559,45 @@ hbuf:
     ds.b    ncells
 xhbuf:
     ds.b    ncells
+packed:
+    dc.l    0                   ; packed state for transfer
 
 ;-----sequencer data--------
     CNOP    0,4
 seq:
-    ds.w    seqlen*2            ; sequence note lists
+    ds.w    seqlen*ncols        ; sequence note lists
+seqtrig:
+    ds.b    seqlen*ncols        ; sequence triggers
 seqstate:
-seqnote:
-    ds.b    4                   ; current notes
+seqpos:
+    ds.b    ncols               ; current notes
 seqlvl: 
-    ds.b    4                   ; current volumes
+    ds.b    ncols               ; current volumes
 envmode:
-    ds.b    4                   ; envelope states
+    ds.b    ncols               ; envelope states
+seql:
+    ds.b    ncols
+seqgate:
+    ds.b    ncols               ; clock gate
 seqparms:
-seqatt:
-    ds.b    2                   ; attack
+seqvol:
+    ds.b    ncols               ; volume
 seqdec:
-    ds.b    2                   ; decay
-seqsus:
-    ds.b    2                   ; sustain
-seqrel:
-    ds.b    2                   ; sustain
+    ds.b    ncols               ; decay
 seqoct:
-    ds.b    2                   ; octave
+    ds.b    ncols               ; octave
 seqmod:
-    ds.b    2                   ; modulation position
+    ds.b    ncols               ; modulation position
 
 ;-----sequencer addressing----
-SQN         equ     (seqnote-seqstate)
+SQP         equ     (seqpos-seqstate)
 SQE         equ     (envmode-seqstate)
 SQL         equ     (seqlvl-seqstate)
-SQA         equ     (seqatt-seqparms)
+SQLN        equ     (seql-seqstate)
+SQG         equ     (seqgate-seqstate)
+SQV         equ     (seqvol-seqparms)
 SQD         equ     (seqdec-seqparms)
-SQS         equ     (seqsus-seqparms)
-SQR         equ     (seqrel-seqparms)
-SQV         equ     (seqoct-seqparms)
+SQO         equ     (seqoct-seqparms)
 SQM         equ     (seqmod-seqparms)
 
 ;-----copper lists---------
@@ -614,47 +630,101 @@ cbuf:
 ;-----functions------------
     SECTION amc,CODE
 
+;-----settrig()-------------
+; Set sequence triggers from maj array.
+    CNOP    0,4
+settrig:
+    lea     seqtrig,a0      ; trigger list
+    lea     maj,a1          ; column counts
+    move.w  #ncells-1,d6    ; loop counter
+.trigloop:
+    move.b  (a1)+,d0        ; count
+    cmp.b   #(wsize/2),d0   ; test majority
+    clr.b   d1              ; zero trigger
+    blt.b   .notrig
+    add.b   #1,d1
+.notrig:
+    move.b  d1,(a0)+        ; store trigger value
+    dbra    d6,.trigloop
+    rts
+
+;-----setseq()---------------
+; Set sequence lengths from xoncount.
+    CNOP    0,4
+    lea     oncount,a0
+    lea     xoncount,a1
+    lea     seql,a1
+    move.w  #ncols-1,d6     ; loop counter
+.loop:
+    move.b  (a1)+,d0        ; count
+    lsr.b   #2,d0           ; divide by 4
+    add.b   #1,d0           ; add 1
+    cmp.b   #seqlen,d0      ; saturate  
+    blt.b   .nosat
+    move.b  #seqlen,d0
+.nosat:
+    move.b  d0,(a1)+        ; set length
+    dbra    d6,.loop
+    rts
+
 ;-----update()-------------
-; Update sequence metrics.
-; uses a0-a3,d1-d6
+; Update sequence metrics and history.
+; uses a0-a4,d0-d6
     CNOP    0,4
 update:
     lea     hist,a0
     lea     hbuf,a1
+    lea     maj,a2            ; column counts
+    move.w  hpos,d0           ; history position
+    move.w  #ncells-1,d6      ; loop counter
+.loop:
+    move.b  (a1)+,d1          ; next cell
+    move.b  (a0)+,d2          ; history cell
+    sub.b   d2,d1             ; subtract
+    add.b   (a2)+,d1          ; update count
+    dbra    d6,.loop
+    lea     hist,a0
+    lea     hbuf,a1
     lea     popcnt,a2
     lea     oncount,a3
+    lea     xhist,a4
     move.w  #ncols-1,d6       ; outer loop over columns
 .outer:
     move.w  #colsizel-1,d5    ; inner loop over words 
 .inner:
-    move.l  hsize(a0),d0      ; xhistory word
-    move.l  ncells(a1),d1     ; xbuf word
-    move.b  (a4,d1.w),d2      ; popcnt hist high
+    move.l  (a4,d0.w),d1      ; xhistory word
+    move.b  (a2,d1.w),d2      ; popcnt hist high
     swap    d1
-    move.b  (a4,d1.w),d3      ; popcnt hist low
+    move.b  (a2,d1.w),d3      ; popcnt hist low
     add.b   d2,d3             ; popcnt hist
-    move.b  (a4,d1.w),d2      ; popcnt buf high
+    move.l  ncells(a1),d1     ; xbuf word
+    move.l  d1,(a4,d0.w)      ; save in history
+    move.b  (a2,d1.w),d2      ; popcnt buf high
     swap    d1
-    move.b  (a4,d1.w),d4      ; popcnt buf low
+    move.b  (a2,d1.w),d4      ; popcnt buf low
     add.b   d4,d2             ; popcnt buf
     sub.b   d3,d2             ; total change
     move.b  d2,ncols(a3)      ; store new col value
-    move.l  (a0)+,d0          ; history word
-    move.l  (a1)+,d1          ; buf word
-    move.b  (a4,d1.w),d2      ; popcnt hist high
+    move.l  (a0,d0.w),d1      ; history word
+    move.b  (a2,d1.w),d2      ; popcnt hist high
     swap    d1
-    move.b  (a4,d1.w),d3      ; popcnt hist low
+    move.b  (a2,d1.w),d3      ; popcnt hist low
     add.b   d2,d3             ; popcnt hist
-    move.b  (a4,d1.w),d2      ; popcnt buf high
+    move.l  (a1)+,d1          ; buf word
+    move.l  d1,(a0,d0.w)      ; save in history
+    move.b  (a2,d1.w),d2      ; popcnt buf high
     swap    d1
-    move.b  (a4,d1.w),d4      ; popcnt buf low
+    move.b  (a2,d1.w),d4      ; popcnt buf low
     add.b   d4,d2             ; popcnt buf
     sub.b   d3,d2             ; total change
     add.b   d2,(a3)           ; store new col value
     dbra    d5,.inner
     addq    #1,a3             ; advance column
     dbra    d6,.outer
-    blcr    #F_UPDATE,flags   ; clear flag
+    bclr    #F_UPDATE,flags   ; clear flag
+    add.w   #1,d0             ; update history position
+    and.w   #wsize-1,d0       ; mod wsize
+    move.w  d0,hpos
     rts 
     
 ;-----nextstate()----------
@@ -780,9 +850,8 @@ mkseq:
     lea     seq,a4            ; seq base
     lea     seqtrig,a2        ; triggers
     lea     seqoct,a3         ; get octave values
-    clr.l   d5                ; zero index reg
-    lsl.l   #modelenlog,d0    ; get mode offset
-    add.l   d0,a6             ; mode address
+    clr.w   d5                ; zero index reg
+    lsl.w   #modelenlog,d0    ; get mode offset
     move.w  #ncols-1,d2       ; loop counter
 .outer:
     move.b  root,d6           ; get root note
@@ -793,13 +862,14 @@ mkseq:
     add.b   d1,d6
     move.w  #seqlen-1,d4      ; loop counter
 .inner:
-    move.b  (a6)+,d5          ; get offset
-    move.b  (a2)+,d1          ; get trigger
-    cmp.b   #0,d1
-    beq.b   .notrig
+    move.b  (a6,d0.w),d5      ; get offset
+    add.w   #1,d0             ; next note in mode
+;   move.b  (a2)+,d1          ; get trigger
+;   cmp.b   #0,d1
+;   beq.b   .notrig
     add.b   d6,d5             ; add to root
     lsl.b   #1,d5             ; get word offset
-    move.w  (a5,d5),d3        ; load period value
+    move.w  (a5,d5.w),d3      ; load period value
     move.w  d3,(a4)+          ; store into seq
     dbra    d4,.inner
     dbra    d2,.outer
@@ -814,35 +884,36 @@ mkseq:
 ; Play next sequence notes.
     CNOP    0,4
 playseq:
-    lea     seqparms,a6       ; length/oct/pos
-    lea     seq,a5            ; sequence lists
+    lea     seq,a5            ; sequence data
     move.l  #_AUD0LC,a4       ; audio register base
-    lea     seqctl,a3
+    lea     seqstate,a3       ; sequence state
+    lea     seqparms,a2
     move.w  #ncols-1,d6       ; loop counter
 .loop:
-    move.b  SQP(a6),d5        ; position
-    move.b  d5,d4             ; offset
+    move.b  SQP(a3),d5        ; position
+    clr.w   d4
+    move.b  d5,d4             ; convert to word offset
     lsl.b   #1,d4
     move.w  (a5,d4),d3        ; period
     addq    #1,d5             ; increment position
-    cmp.b   SQL(a6),d5
+    cmp.b   SQLN(a3),d5       ; check against length
     bne.b   .nowrap
     clr.b   d5
 .nowrap:
-    move.b  d5,SQP(a6)        ; new position
+    move.b  d5,SQP(a3)        ; new position
     move.w  #TABSIZE,4(a4)    ; length
     move.l  #wav32,0(a4)      ; pointer
-    move.w  #64,8(a4)         ; volume
-    move.b  #64,SQE(a3)       ; envelope
-    cmp.w   #0,d3
-    bne     .trig
-    move.w  #0,8(a4)          ; no volume
-.trig:
+    move.b  SQV(a2),d2
+    move.b  d2,SQL(a3)        ; level
+    move.w  #0,8(a4)          ; clear volume
+    cmp.w   #0,d3             ; check for 0 period
+    beq.b   .notrig
+    move.w  d2,8(a4)          ; volume
     move.w  d3,6(a4)          ; period
+.notrig:
     add.l   #AUDOFFSET,a4     ; next channel
-    addq    #1,a6             ; next track
-    addq    #1,a3             ; ""
-    add.l   #SQLEN,a5         ; ""
+    add.w   #1,a3             ; ""
+    add.l   #seqlen,a5        ; ""
     dbra    d6,.loop
     rts
 
@@ -923,6 +994,50 @@ colormod:
     move.w  d6,_COLOR00
     rts
 
+;-----pack()---------------
+; pack state at d0 into packed as dword.
+; uses d0-d2,d6,a6
+    CNOP    0,4
+pack:
+    lea     state,a6          ; compute state address
+    lsl.w   #stwidthlog,d0    
+    move.w  #ncells-1,d6      ; loop counter
+    move.l  #1,d1             ; bit mask
+    move.w  #0,d2             ; bit buffer
+.loop:
+    cmp.b   #0,(a6,d0.w)      ; test byte
+    beq.b   .next
+    or.l    d1,d2             ; set bit
+.next:
+    lsl.l   #1,d1             ; advance mask
+    add.w   #1,d0             ; advance position
+    dbra    d6,.loop
+    move.l  d2,packed         ; store bits
+    rts
+
+;-----writepp()-----------------
+; write packed state over parallel port.
+; TODO: poll ACK line between writes..
+    CNOP    0,4
+writepp:
+    lea     packed,a6         ; packed data (dword)
+    move.l  #CIAA,a5          ; get CIAA base
+    move.l  #CIAB,a4          ; get CIAB base
+    move.b  #$FF,CIADDRB(a5)  ; set bits to output
+    move.b  (a6)+,d0          
+    move.b  d0,CIAPRB(a5)     ; write byte  
+    tst.b   CIAPRA(a4)        ; waste cycle
+    move.b  (a6)+,d0          
+    move.b  d0,CIAPRB(a5)     ; write byte  
+    tst.b   CIAPRA(a4)        ; waste cycle
+    move.b  (a6)+,d0          
+    move.b  d0,CIAPRB(a5)     ; write byte  
+    tst.b   CIAPRA(a4)        ; waste cycle
+    move.b  (a6)+,d0          
+    move.b  d0,CIAPRB(a5)     ; write byte  
+    tst.b   CIAPRA(a4)        ; waste cycle
+    rts
+    
 ;------------------------------------------------------------------------------
     end
 ;------------------------------------------------------------------------------

@@ -1,7 +1,6 @@
 seqlenlog   equ 3
 seqlen      equ (1<<seqlenlog)    ; seq max length in bytes 
-seqcnt      equ 6                 ; number of modes
-scalecnt    equ 6                 ; number of scales/leads
+seqcnt      equ 7                 ; number of modes
 modelenlog  equ (seqlenlog+2)     ; mode block size (log)
 modelen     equ (1<<modelenlog)
 
@@ -9,7 +8,7 @@ modelen     equ (1<<modelenlog)
     SECTION amd,DATA
     EVEN
 root:       
-    dc.b    0
+    dc.b    4
     CNOP    0,4
 modes:
 modep:
@@ -50,6 +49,8 @@ mode7:
 
 ;-----lead scales-------------
 scales:
+scalep:
+    dc.b    6, 0,2,4,5,7,9,0
 scale1:
     dc.b    6, 0,2,4,7,9,10,0
 scale2:
