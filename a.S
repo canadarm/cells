@@ -70,7 +70,7 @@ bgmax       equ $0333
 
 ;-----sequence defs--------
 countmod    equ 64                      ; 16th notes between mode transition
-F_ASC       equ 0                       ; ascending flag
+F_DESC      equ 0                       ; descending flag
 F_PERF      equ 1                       ; move to perfect flag
 
 ;-----timing defs----------
@@ -183,25 +183,21 @@ init:
     move.b  #1,(a0)+
     move.b  #0,(a1)+
     dbra    d4,.inittrig
-    lea     seqlvl,a0
-    lea     seql,a1
-    lea     seqdec,a2
-    lea     seqoct,a3
-    lea     seqmod,a4
-    lea     seqpos,a5
-    lea     seqvol,a6
+    lea     seqstate,a0
     move.w  #ncols-1,d4
 .initseq:
-    move.b  #0,(a0)+            ; level
-    move.b  #seqlen,(a1)+       ; length
-    move.b  #0,(a5)+            ; position
-    move.b  #64,(a6)+           ; volume
-    move.b  #07,(a2)+           ; decay
-    move.b  #0,(a4)+            ; mod
+    move.b  #0,SQP(a0)          ; position
+    move.b  #0,SQL(a0)          ; level
+    move.b  #1,SQG(a0)          ; gate
+    move.b  #0,SQM(a0)          ; modulation
+    move.b  #seqlen,SQLN(a0)    ; length
+    move.b  #64,SQV(a0)         ; volume
+    move.b  #9,SQD(a0)          ; decay
     move.b  d4,d3
     and.b   #1,d3
     add.b   #1,d3
-    move.b  d3,(a3)+            ; octave
+    move.b  d3,SQO(a0)          ; octave
+    addq    #1,a0
     dbra    d4,.initseq
     clr.w   d0
     jsr     mkseq               ; init sequences
@@ -291,7 +287,7 @@ init:
 .noupdate:
     btst    #F_MOD,flags
     beq     .nomod
-;   jsr     modulate
+    jsr     modulate
 .nomod:
     btst    #F_CLOCK8,flags
     beq     .noclock8
@@ -371,10 +367,9 @@ init:
     jsr     -132(a6)            ; permit MT
     ENDC
 .return:
+.xx:
     movem.l (sp)+,d1-d6/a0-a6
-    move.l  xoncount,d0
-    move.l  oncount,d1
-    move.l  seql,d3
+    move.w  #1,d0
     rts
 
 ;------interrupts----------
@@ -408,7 +403,7 @@ keyint:
     rte
     
 vblankint:
-    movem.l d1-d6/a0-a2,-(sp)
+    movem.l d1-d6/a0-a1,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #5,d0               ; VBLANK handler
     beq     .exit
@@ -447,12 +442,11 @@ vblankint:
 .nodraw:
     lea     seqstate,a0         ; envelope state
     move.l  #_AUD0LC,a1         ; audio ptr
-    lea     seqparms,a2
     clr.l   d3                  ; zero volume reg
     move.w  #ncols-1,d4         ; loop counter
 .loop:
     move.b  SQL(a0),d3          ; volume amount
-    move.b  SQD(a2),d2          ; decay amount
+    move.b  SQD(a0),d2          ; decay amount
     sub.b   d2,d3
     cmp.b   #0,d3
     bgt.b   .pos
@@ -470,7 +464,7 @@ vblankint:
 .exit:
     move.w  #$4020,_INTREQ      ; clear INTREQ
     move.w  #$4020,_INTREQ      ; ... twice
-    movem.l (sp)+,d1-d6/a0-a2
+    movem.l (sp)+,d1-d6/a0-a1
     rte
 
 timerint:
@@ -485,7 +479,7 @@ timerint:
     cmp.b   #countmod,count     ; check for mod divider
     bne     .nomod
     clr.b   count
-    bset    #F_MOD,flags        ; reset count and modulate
+;   bset    #F_MOD,flags        ; reset count and modulate
 .nomod:
     move.b  count,d0            ; check counter modulo
     and.b   #$0F,d0             ; 16th note
@@ -568,6 +562,8 @@ count:
 ;------saves/system--------
     SECTION amd,DATA
     EVEN
+dbg:
+    dc.l    0
 savelvl2:
     dc.l    0                   ; saved lvl2 handler
 savelvl3:
@@ -605,32 +601,33 @@ seqpos:
     ds.b    ncols               ; current notes
 seqlvl: 
     ds.b    ncols               ; current volumes
-envmode:
-    ds.b    ncols               ; envelope states
-seql:
-    ds.b    ncols               ; sequence lengths
 seqgate:
     ds.b    ncols               ; clock gate
-seqparms:
+seqmod:
+    ds.b    ncols               ; modulation position
+seqoct:
+    ds.b    ncols               ; octave
+seql:
+    ds.b    ncols               ; sequence lengths
 seqvol:
     ds.b    ncols               ; volume
 seqdec:
     ds.b    ncols               ; decay
-seqoct:
-    ds.b    ncols               ; octave
-seqmod:
-    ds.b    ncols               ; modulation position
+    EVEN
+nextmod:
+    dc.w    0                   ; next voice to modulate
+modflags:
+    dc.w    0                   ; modulation state
 
 ;-----sequencer addressing----
 SQP         equ     (seqpos-seqstate)
-SQE         equ     (envmode-seqstate)
 SQL         equ     (seqlvl-seqstate)
 SQLN        equ     (seql-seqstate)
 SQG         equ     (seqgate-seqstate)
-SQV         equ     (seqvol-seqparms)
-SQD         equ     (seqdec-seqparms)
-SQO         equ     (seqoct-seqparms)
-SQM         equ     (seqmod-seqparms)
+SQV         equ     (seqvol-seqstate)
+SQD         equ     (seqdec-seqstate)
+SQO         equ     (seqoct-seqstate)
+SQM         equ     (seqmod-seqstate)
 
 ;-----copper lists---------
     SECTION amdc,DATA_C
@@ -875,26 +872,27 @@ copystate:
     move.w  d0,_BLTSIZE       ; start the blit
     rts
 
-;-----mkseq(d0)--------------
-; Given a mode index, write period values into
-; seq for each channel.
+;-----mkseq()--------------
+; write period values into seq for each channel.
 ; uses a2-a6,d1-d5.
     CNOP    0,4
 mkseq:
     lea     modes,a6          ; get mode base
     lea     ptab,a5           ; get period table base
     lea     seq,a4            ; seq base
-    lea     seqoct,a3         ; get octave values
+    lea     seqstate,a3       ; sequence state
     clr.w   d5                ; zero index reg
-    lsl.w   #modelenlog,d0    ; get mode offset
     move.w  #ncols-1,d2       ; loop counter
 .outer:
     move.b  root,d6           ; get root note
-    move.b  (a3)+,d1          ; load octave
+    move.b  SQO(a3),d1        ; load octave
     lsl.b   #2,d1             ; oct * 12 + root
     add.b   d1,d6
     lsl.b   #1,d1
     add.b   d1,d6
+    clr.w   d0
+    move.b  SQM(a3),d0        ; get mode position
+    lsl.w   #modelenlog,d0    ; get mode index
     move.w  #seqlen-1,d4      ; loop counter
 .inner:
     move.b  (a6,d0.w),d5      ; get offset
@@ -904,6 +902,7 @@ mkseq:
     move.w  (a5,d5.w),d3      ; load period value
     move.w  d3,(a4)+          ; store into seq
     dbra    d4,.inner
+    addq    #1,a3             ; next voice
     dbra    d2,.outer
     rts
 
@@ -915,7 +914,6 @@ playseq:
     lea     seq,a5            ; sequence data
     move.l  #_AUD0LC,a4       ; audio register base
     lea     seqstate,a3       ; sequence state
-    lea     seqparms,a2
     move.w  #ncols-1,d6       ; loop counter
     IFD ONEVOICE
     clr.w   d6
@@ -934,7 +932,7 @@ playseq:
     move.b  d5,SQP(a3)        ; new position
     cmp.b   #0,(a6,d4)        ; check for 0 trigger
     beq.b   .notrig
-    move.b  SQV(a2),d2
+    move.b  SQV(a3),d2
     move.b  d2,SQL(a3)        ; level
     move.w  #TABSIZE,4(a4)    ; length
     move.l  #wav32,0(a4)      ; pointer
@@ -974,8 +972,13 @@ handlekb:
     and.w   #$03,d6
     cmp.b   #0,d6
     beq     .done
-    cmp.b   #2,d6
+    cmp.b   #3,d6
     bgt     .done
+    cmp.b   #3,d6
+    bne     .setstate           ; 1,2 - set state
+    bset    #F_MOD,flags        ; 3 - modulate
+    bra     .done 
+.setstate: 
     move.w  pos,d4              ; get current position
     lsl.w   #stwidthlog,d4      ; ..
     move.w  #(ncells/4)-1,d5    ; loop counter
@@ -1004,6 +1007,49 @@ handlekb:
     bra     .done
 .done:
     bclr    #F_KEY,flags
+    rts
+
+;-----modulate()-----------
+; advance the modulation to
+; the next position.
+    CNOP    0,4
+modulate:
+    lea     seqmod,a6           ; sequencer mod state
+    move.w  nextmod,d6          ; next mod index
+    move.b  mode,d5             ; next mode
+    btst    #F_PERF,modflags    ; test if moving to perfect (0) or next mode
+    beq     .next
+    clr.b   d5                  ; use perfect mode
+.next:
+    move.b  d5,(a6,d6.w)        ; update mod of next voice
+    btst    #F_DESC,modflags    ; test if descending
+    bne     .desc
+    add.w   #1,d6               ; advance voice
+    cmp.w   #ncols,d6           ; check for top
+    blt     .done
+    move.w  #ncols-1,d6         ; reverse direction 
+    bset    #F_DESC,modflags    ; set descending
+    bchg    #F_PERF,modflags    ; toggle mode bit
+    bne     .done
+    add.b   #1,mode             ; increment mode
+    bra     .done
+.desc:
+    sub.w   #1,d6               ; advance voice
+    cmp.w   #0,d6               ; check for bottom
+    bge     .done
+    move.w  #0,d6               ; reverse direction
+    bclr    #F_DESC,modflags    ; set ascending
+    bchg    #F_PERF,modflags    ; toggle mode bit
+    bne     .done
+    add.b   #1,mode             ; increment mode
+.done:
+    move.w  d6,nextmod          ; update next mod position
+    cmp.b   #seqcnt,mode        ; wrap mode if needed
+    blt     .return
+    move.b  #1,mode             ; restart mode counter
+.return:
+    bclr    #F_MOD,flags
+    jsr     mkseq               ; compute new sequences
     rts
 
 ;-----colormod()-----------

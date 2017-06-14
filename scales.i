@@ -6,7 +6,8 @@ modelen     equ (1<<modelenlog)
 
 ;-----sequence lists----------
     SECTION amd,DATA
-    EVEN
+mode:
+    dc.b    1
 root:       
     dc.b    4
     CNOP    0,4
@@ -53,8 +54,6 @@ scalep:
     dc.b    6, 0,2,4,5,7,9,0
 scale1:
     dc.b    6, 0,2,4,7,9,10,0
-scale2:
-    dc.b    6, 0,2,3,5,7,10,0
 scale3:
     dc.b    6, 0,3,5,7,8,10,0
 scale4:
