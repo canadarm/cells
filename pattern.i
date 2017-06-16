@@ -28,6 +28,8 @@ rules:
 patsl       equ   4   ; shift for pattern index
 pat1        equ   0   ; offset of first
 pat2        equ   8   ; offset of second
+patsizelog  equ   2   ; 8x8 patterns
+patsize     equ   (1<<patsizelog)
 patterns:
 p109:
     dc.b    %00000000
