@@ -199,8 +199,12 @@ init:
     move.b  d3,SQO(a0)          ; octave
     addq    #1,a0
     dbra    d4,.initseq
-    clr.w   d0
-    jsr     mkseq               ; init sequences
+    clr.w   d0                  ; init sequence notes
+.mkseqs:
+    jsr     mkseq
+    add.w   #1,d0
+    cmp.w   #ncols,d0
+    blt     .mkseqs
 
 ;-----init metrics---------
     lea     oncount,a0
@@ -370,6 +374,9 @@ init:
 .xx:
     movem.l (sp)+,d1-d6/a0-a6
     move.w  #1,d0
+    move.l  seqgate,d0
+    move.l  xoncount,d1
+    move.w  pattern,d2
     rts
 
 ;------interrupts----------
@@ -503,7 +510,7 @@ timerint:
     move.b  d0,cpos
     cmp.b   #0,d0
     bne.b   .done
-    bsr     nextstate
+    jsr     nextstate
     bset    #F_UPDATE,flags
 .done 
 .exit:
@@ -516,6 +523,7 @@ timerint:
     INCDIR  "git/"
     INCLUDE "tabsaw.i"
     INCLUDE "scales.i"
+    INCLUDE "pattern.i"
 
 ;------locals--------------
     SECTION amd,DATA
@@ -539,9 +547,13 @@ coprpos:
 flags:
     dc.w    0
 rule:
-    dc.w    0                   ; automata rule
+    dc.b    0
+ruleb:
+    dc.b    0                   ; automata rule
 negate:
-    dc.w    0                   ; 1 to flip states
+    dc.b    0
+negateb:
+    dc.b    0                   ; 1 to flip states
 oncount:
     ds.b    ncols               ; count of set bits by column
 xoncount:
@@ -684,9 +696,10 @@ setseq:
     lea     oncount,a0
     lea     xoncount,a1
     lea     seql,a2
+    lea     seqgate,a3
     move.w  #ncols-1,d6     ; loop counter
 .loop:
-    move.b  (a1)+,d0        ; count
+    move.b  (a0)+,d0        ; count
     lsr.b   #3,d0           ; divide by 8
     add.b   #2,d0           ; add 2
     cmp.b   #seqlen,d0      ; saturate  
@@ -694,6 +707,13 @@ setseq:
     move.b  #seqlen,d0
 .nosat:
     move.b  d0,(a2)+        ; set length
+    move.b  (a1)+,d0        ; xcount
+    clr.b   d1              ; gate value
+    cmp.b   #8,d0           ; check gate threshold
+    blt     .setgate
+    add.b   #1,d1
+.setgate:
+    move.b  d1,(a3)+        ; set gate value
     dbra    d6,.loop
     rts
 
@@ -872,38 +892,39 @@ copystate:
     move.w  d0,_BLTSIZE       ; start the blit
     rts
 
-;-----mkseq()--------------
-; write period values into seq for each channel.
+;-----mkseq(d0)------------
+; write period values into seq for channel
+; index in d0.
 ; uses a2-a6,d1-d5.
     CNOP    0,4
 mkseq:
     lea     modes,a6          ; get mode base
     lea     ptab,a5           ; get period table base
     lea     seq,a4            ; seq base
-    lea     seqstate,a3       ; sequence state
-    clr.w   d5                ; zero index reg
-    move.w  #ncols-1,d2       ; loop counter
-.outer:
+    lea     seqoct,a3         ; octaves
+    lea     seqmod,a2         ; modes
+    clr.w   d2
+    move.b  (a2,d0.w),d2      ; get mode position
+    lsl.w   #modelenlog,d2    ; get mode index
     move.b  root,d6           ; get root note
-    move.b  SQO(a3),d1        ; load octave
+    move.b  (a3,d0.w),d1      ; load octave
     lsl.b   #2,d1             ; oct * 12 + root
     add.b   d1,d6
     lsl.b   #1,d1
     add.b   d1,d6
-    clr.w   d0
-    move.b  SQM(a3),d0        ; get mode position
-    lsl.w   #modelenlog,d0    ; get mode index
+    lsl.w   #seqlenlog,d0     ; get sequence offset
+    add.w   d0,d2             ; get mode offset
     move.w  #seqlen-1,d4      ; loop counter
+    clr.w   d5                ; zero index reg
 .inner:
-    move.b  (a6,d0.w),d5      ; get offset
-    add.w   #1,d0             ; next note in mode
+    move.b  (a6,d2.w),d5      ; get offset
     add.b   d6,d5             ; add to root
     lsl.b   #1,d5             ; get word offset
     move.w  (a5,d5.w),d3      ; load period value
-    move.w  d3,(a4)+          ; store into seq
+    move.w  d3,(a4,d0.w)      ; store into seq
+    add.w   #1,d2             ; next note in mode
+    add.w   #2,d0             ; next seq position
     dbra    d4,.inner
-    addq    #1,a3             ; next voice
-    dbra    d2,.outer
     rts
 
 ;-----playseq()-------------
@@ -919,6 +940,8 @@ playseq:
     clr.w   d6
     ENDC
 .loop:
+    cmp.b   #0,SQG(a3)        ; gate
+    beq     .notrig 
     move.b  SQP(a3),d5        ; position
     clr.w   d4
     move.b  d5,d4             ; convert to word offset
@@ -969,6 +992,9 @@ handlekb:
     bra     .done
 .row3:
     lea     state,a1
+    and.b   #$0F,d6
+    cmp.b   #8,d6
+    bge     .setpat
     and.w   #$03,d6
     cmp.b   #0,d6
     beq     .done
@@ -1005,6 +1031,14 @@ handlekb:
     add.w   #(ncells/2),d4
     move.b  #1,(a1,d4.w)
     bra     .done
+.setpat:
+    move.w  #1,d0
+    cmp.b   #9,d6
+    bge     .inc
+    neg.w   d0
+.inc
+    jsr     setpat
+    bra     .done
 .done:
     bclr    #F_KEY,flags
     rts
@@ -1017,6 +1051,7 @@ modulate:
     lea     seqmod,a6           ; sequencer mod state
     move.w  nextmod,d6          ; next mod index
     move.b  mode,d5             ; next mode
+    move.w  d6,d0               ; save nextmod for mkseq
     btst    #F_PERF,modflags    ; test if moving to perfect (0) or next mode
     beq     .next
     clr.b   d5                  ; use perfect mode
@@ -1113,7 +1148,28 @@ writepp:
     move.b  d0,CIAPRB(a5)     ; write byte  
     tst.b   CIAPRA(a4)        ; waste cycle
     rts
-    
+
+;-----setpat(d0)----------------
+; Advance pattern by the amount in d0 with wrap 
+    CNOP    0,4
+setpat: 
+    move.w  pattern,d1
+    add.b   d0,d1 
+    cmp.w   #0,d1
+    bge     .pos
+    add.w   #numpat,d1
+.pos: 
+    cmp.w   #numpat,d1
+    blt     .inrange
+    sub.w   #numpat,d1
+.inrange:
+    move.w  d1,pattern
+    lea     rules,a6 
+    lsl.w   #rulesl,d1
+    move.b  rulen(a6,d1.w),ruleb
+    move.b  rulep(a6,d1.w),negateb
+    rts
+
 ;------------------------------------------------------------------------------
     end
 ;------------------------------------------------------------------------------

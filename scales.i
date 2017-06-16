@@ -6,6 +6,7 @@ modelen     equ (1<<modelenlog)
 
 ;-----sequence lists----------
     SECTION amd,DATA
+    CNOP    0,4
 mode:
     dc.b    1
 root:       
@@ -24,7 +25,7 @@ mode1:
     dc.b    10,10,5,7,12,5,4,7
 mode3:
     dc.b    0,7,-5,5,3,7,9,-5
-    dc.b    0,7,-5,5,3,7,9,-5
+    dc.b    0,7,3,5,7,0,3,-5 #FIXME
     dc.b    12,5,3,9,0,5,10,12
     dc.b    9,3,7,0,5,0,7,12
 mode4:
