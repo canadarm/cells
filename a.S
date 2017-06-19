@@ -171,7 +171,7 @@ init:
     lea     state,a0
     move.b  #1,16(a0)
     move.l  #0,copypos
-    move.l  #width,bplpos
+    move.l  #0,bplpos
 
 ;-----init sequence--------
     lea     seqtrig,a0
@@ -420,7 +420,7 @@ vblankint:
     move.w  d6,copptrl          ; update copper
     swap    d6
     move.w  d6,copptrh
-    lea     bgpl,a1             ; screen base for copy
+    lea     bgpl0,a1            ; screen base for copy
     move.l  copypos,d4          ; offset for copy
     move.l  d4,d5
     add.l   #coff,d5
@@ -432,7 +432,7 @@ vblankint:
 .nocopy: 
     move.w  drawpos,d0          ; state position
     bsr     drawstate           ; copy state
-    lea     bgplhi,a1           ; screen base for render
+    lea     bgplhi0,a1          ; screen base for render
     move.l  bplpos,d4           ; offset for render
     move.l  d4,d5
     add.l   #coff,d5
@@ -654,8 +654,12 @@ coplist:
 ;-----bitplanes------------
     SECTION ambss,BSS_C
     CNOP    0,4
+bgpl0:
+    ds.b    width
 bgpl:
-    ds.b    bplsize
+    ds.b    bplsize-width
+bgplhi0:
+    ds.b    width
 bgplhi:
     ds.b    bplsize
     CNOP    0,4
