@@ -88,7 +88,8 @@ kbhs        equ 95              ; keyboard handshake duration - 02 clocks
 countmod    equ 64              ; 16th notes between mode transition
 
 ;-----color defs------------
-ctabsize    equ   8
+ctablog     equ   3
+ctabsize    equ   (1<<ctablog)
 cskip       equ   height/ctabsize
 
 ;-----entry point----------
@@ -187,6 +188,9 @@ init:
     move.w  d0,copptr2l
     swap    d0
     move.w  d0,copptr2h
+    move.w  ctab,d1             ; fg color
+    move.w  d1,copptrc2
+    move.w  d1,copptrc3
     lea     coplist,a1          ; copper list position
     lea     ctab,a2             ; color table base
     move.w  #0,d0               ; color list index
@@ -407,17 +411,26 @@ vblankint:
     clr.w   d0
     clr.w   d1
     jsr     drawpat             ; draw pattern 0
-    lea     fgpl0,a1            ; get fg pointer
-    jsr     clearrow            ; clear fg row
+    move.w  cposfg,d5           ; get color table position
+    lsl.w   #1,d5
+    lea     ctabfg,a1
+    move.w  (a1,d5.w),d4        ; load color from table
+    move.w  d4,copptrc2         ; update fg colors
+    move.w  d4,copptrc3
+    cmp.w   #ctabsize-1,cposfg  ; increment table position
+    beq     .nodraw
+    add.w   #1,cposfg
 .nodraw:
     btst    #F_MATCH,flags
     beq     .exit
     bclr    #F_MATCH,flags
-    lea     fgpl0,a0            ; get fg pointer
-    lea     celloff(a0),a1
+    lea     fgpl0,a1            ; get fg pointer
+    jsr     clearrow            ; clear fg row
+    add.l   #celloff,a1
     clr.w   d0
     clr.w   d1
     jsr     drawpat             ; draw pattern 0
+    clr.w   cposfg              ; reset table position
 .exit:
     move.w  #$4020,_INTREQ      ; clear INTREQ
     move.w  #$4020,_INTREQ      ; ... twice
@@ -554,6 +567,12 @@ copptr2l:
     dc.w    BPL2PTH_
 copptr2h:
     dc.w    0
+    dc.w    COLOR02_
+copptrc2:
+    dc.w    0
+    dc.w    COLOR03_
+copptrc3:
+    dc.w    0
 coplist:
     dcb.l   64, CL_END
 
@@ -585,6 +604,17 @@ ctab:
     dc.w    $0138
     dc.w    $0239
     dc.w    $024A
+ctabfg:
+    dc.w    $0FFF
+    dc.w    $0CCC
+    dc.w    $0AAA
+    dc.w    $0777
+    dc.w    $0333
+    dc.w    $0111
+    dc.w    $0000
+    dc.w    $0000
+cposfg:
+    dc.w    0
 
 ;-----functions------------
     SECTION amc,CODE
