@@ -4,7 +4,7 @@ numpat      equ   12
     SECTION amd,DATA
     CNOP    0,4
 pattern:
-    dc.w    0         ; current pattern
+    dc.w    1         ; current pattern
     CNOP    0,4
 rulesl      equ   1   ; shift for rule index
 rulen       equ   0   ; rule offset
@@ -26,8 +26,6 @@ rules:
 ;-----pattern bits--------
     CNOP    0,4
 patsl       equ   4   ; shift for pattern index
-pat1        equ   0   ; offset of first
-pat2        equ   8   ; offset of second
 patsizelog  equ   2   ; 8x8 patterns
 patsize     equ   (1<<patsizelog)
 patterns:

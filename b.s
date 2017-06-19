@@ -6,7 +6,7 @@
     INCLUDE "exec/exec_lib.i"
     INCLUDE "exec/nodes.i"
 ;-----macro defs-----------
-DEBUG       SET 1
+;DEBUG       SET 1
 
 ;-----screen defs----------
 width       equ 320             ; plane width
@@ -45,17 +45,33 @@ psize       equ (pwidthb*pwidth); pattern size
 psizel      equ (psize/4)       ; pattern size in dwords
 psizelog    equ (pwidthbl+pwidthlog) ; log2(psize)
 psizeb      equ (psize/32)      ; pattern size (packed)
+sprwidthlog equ (pwidthlog+csizelog-3)
+sprwidth    equ (1<<sprwidthlog)
+sprwidthl   equ (sprwidth/4)
+sprwidthw   equ (sprwidth/2)
+sprsizelog  equ (sprwidthlog+csizelog+pwidthlog)
+sprsize     equ (1<<sprsizelog)
+sprsizel    equ (sprsize/4)
+sprsizew    equ (sprsize/2)
+
+;-----buffer defs----------
+bsize       equ stwidth*csize           ; render buffer size
+bsizel      equ bsize/4                 ; render buffer size in dwords
+coff        equ (bplwidth-sprwidth)/2   ; offset of cell display in bytes
+coffw       equ (bplwidthw-sprwidthw)/2 ; offset of cell display in words
 
 ;-----flag bits------------
 F_DRAW      equ 0               ; render next vblank
-F_DATA      equ 1               ; key pressed
+F_KEY       equ 1               ; key pressed
+F_DATA      equ 2               ; data on LPT
+F_ERR       equ 15              ; error exit
 
 ;-----sequencer defs-------
 E_ATT       equ 0
 E_DEC       equ 1
 E_SUS       equ 2
 E_REL       equ 3
-E_MASK      equ 3
+E_MASK      equ 4
 F_NOTEON    equ 7
 
 ;-----timing defs----------
@@ -66,6 +82,7 @@ F_NOTEON    equ 7
 ; 60hz ~ 11934 (NTSC)
 period      equ 14800           ; timer interrupt period
 kbhs        equ 95              ; keyboard handshake duration - 02 clocks
+countmod    equ 64              ; 16th notes between mode transition
 
 ;-----entry point----------
 ; most of the CIA saving is trying
@@ -112,7 +129,7 @@ init:
     move.l  4.w,a6              ; execbase
     jsr     -132(a6)            ; Forbid MT
     ENDC
-
+    
 ;-----init playfield-------
     move.w  #$1200,_BPLCON0     ; 
     move.w  #00,_BPLCON1        ; hscroll = 0
@@ -122,34 +139,50 @@ init:
     move.w  #$2100,_DIWHIGH     ; diw-high  = msb set for stop
     move.w  #$2C81,_DIWSTRT     ; diw-start = $2C81
     move.w  #$F4C1,_DIWSTOP     ; diw-stop  = $F4C1 (NTSC, PAL 2CC1)
-    move.w  #$0000,_COLOR00     ; bg color (0) 
-    move.w  #$011F,_COLOR17     ; sprite color 0/1
-    move.w  #$011F,_COLOR18     ; sprite color 0/1
-    move.w  #$0FF1,_COLOR21     ; sprite color 2/3
-    move.w  #$0FF1,_COLOR22     ; sprite color 2/3
+    move.w  #$0111,_COLOR00     ; bg color (0) 
+    move.w  #$0FFF,_COLOR01     ; fg color (1)
 
-;-----init sprites---------
-    move.l  #spr0ctl,d0
-    move.w  d0,_SPR0PTL
-    swap    d0
-    move.w  d0,_SPR0PTH
-    move.l  #spr1ctl,d0
-    move.w  d0,_SPR2PTL
-    swap    d0
-    move.w  d0,_SPR2PTH
-    lea     spr0ctl,a6
-    move.w  #$1010,(a6)+
-    move.w  #$1800,(a6)         ; vstop = 8 (or 16?)
-    lea     spr1ctl,a6
-    move.w  #$4040,(a6)+
-    move.w  #$4800,(a6) 
+;-----init bitplanes-------
+    IFND DEBUG
+    lea     bgpl,a0             ; bitplane address
+    move.l  #bplsizel*2-1,d0    ; loop counter
+.initbpl:
+    clr.l   (a0)+
+    dbra    d0,.initbpl
+    ENDC
+    move.l  #0,copypos
+    move.l  #width,bplpos
+
+;-----init buffers----------
+    IFND DEBUG
+    lea     spr0,a0             ; state buffer addr
+    move.l  #sprsizel*2-1,d0    ; loop counter
+.initspr:
+    clr.l   (a0)+ 
+    dbra    d0,.initspr
+    ENDC
+    clr.w   d0
+    jsr     setpat
+    lea     buf,a0
+    move.w  #hsize-1,d6
+.buflp:
+    move.b  #$80,(a0)+ 
+    dbra    d6,.buflp
+; test
+    lea     bgpl,a1             ; screen base for render
+    move.w  #0,d1
+    move.w  #4,d0
+    jsr     drawpat             ; draw pattern 0
+    move.w  #1,d1
+    move.w  #8,d0
+    jsr     drawpat             ; draw pattern 0
 
 ;-----setup copper list----
     move.l  #bgpl,d0            ; set up bg pointer
     move.w  d0,copptrl
     swap    d0
     move.w  d0,copptrh
-    IFND DEBUG 
+    IFND DEBUG
     move.l  #copstart,_COP1LCH 
     ENDC
 
@@ -171,8 +204,8 @@ init:
     move.l  #CIAB,a6            ; CIA-B base
     move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
     move.b  #$7F,CIAICR(a6)     ; clear CIA-B interrupts
-    and.b   #$18,CIACRB(a5)     ; CIA-A TA: one-shot, KB input mode
-    and.b   #$C0,CIACRB(a6)     ; CIA-B TB: continuous, pulse, PB6OFF
+    and.b   #$18,CIACRA(a5)     ; CIA-A TA: one-shot, KB input mode
+    and.b   #$C0,CIACRA(a6)     ; CIA-B TB: continuous, pulse, PB6OFF
     move.b  #(period&$FF),CIATBLO(a6) ; set CIA-B timer B period 
     move.b  #(period>>8),CIATBHI(a6)  ; ..for timer interrupt
     move.b  #(kbhs&$FF),CIATBLO(a5)   ; set CIA-A timer B period
@@ -180,7 +213,7 @@ init:
     move.l  #keyint,$68.w       ; install lvl2 handler (cia-a)
     move.l  #vblankint,$6C.w    ; install lvl3 handler
     move.l  #timerint,$78.w     ; install lvl6 handler (cia-b)
-    move.b  #$98,CIAICR(a5)     ; enable CIA-A FLG/SP interrupt (keyboard)
+    move.b  #$88,CIAICR(a5)     ; enable CIA-A FLG/SP interrupt (keyboard) (was 9 for FLG)
     move.b  #$82,CIAICR(a6)     ; enable CIA-B TB interrupt
     move.w  #$E028,_INTENA      ; enable lvl2/3/6
     waitr   a1,d0,d1,d2
@@ -191,34 +224,18 @@ init:
     move.w  #DMAF_ALLA,_DMACON  ; start DMA
     ENDC
 
-; set up buffer
-    lea     buf,a0
-    move.w  #hsize-1,d6
-.buflp:
-    move.b  #$80,(a0)+ 
-    dbra    d6,.buflp
-    lea     pat0,a0
-    lea     mask0,a1
-    lea     pat1,a2
-    lea     mask1,a3
-    move.w  #7,d6
-.patlp:
-    move.b  #$80,(a0)+
-    move.b  #$10,(a2)+
-    move.b  #$FF,(a1)+
-    move.b  #$FF,(a3)+
-    dbra    d6,.patlp
-    jsr     match
-    jsr     findmatch
-    move.w  d0,mx0
-    move.w  d1,mx1
+;-----test-------------------
+;   jsr     match
+;   jsr     findmatch
+;   move.w  d0,mx0
+;   move.w  d1,mx1
 
 ;-----frame loop start-------
 .mainloop:
     btst    #F_DATA,flags
     beq     .nodata
-    jsr     match
-    jsr     findmatch
+;   jsr     match
+;   jsr     findmatch
 .nodata:
 .endmain:
     btst    #6,$bfe001
@@ -226,15 +243,13 @@ init:
 ;-----frame loop end---------
 
 ;-----exit code------------
-    IFND DEBUG
+.exit:
     move.w  #$7FFF,_INTENA      ; turn off interrupts
-    move.l  #CIAB,a6
     move.l  #CIAA,a5
+    move.l  #CIAB,a6
     bclr.b  #0,CIACRB(a6)       ; stop timer
     move.b  #$7F,CIAICR(a6)     ; clear CIA-B interrupts
     move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
-    ENDC
-.end:
     movem.l (sp)+,d1-d2         ; pop saved copper,view
     movem.l (sp)+,d3-d6         ; pop CIA-A regs
     IFND DEBUG
@@ -273,9 +288,9 @@ init:
     move.l  savelvl6,d0         ; restore lvl6 handler
     move.l  d0,$78.w
     move.w  d4,_INTENA          ; restore interrupts
-    or.w    #$8000,d5
     move.w  #$7FFF,_INTREQ      ; clear pending
     move.w  #$7FFF,_INTREQ
+    or.w    #$8000,d5
     move.w  d5,_INTREQ          ; restore reqs
     or.w    #$8000,d6
     move.w  #$7FFF,_ADKCON
@@ -295,19 +310,18 @@ init:
     jsr     -132(a6)            ; permit MT
     ENDC
 .return:
+.xx:
     movem.l (sp)+,d1-d6/a0-a6
-    move.l  mbits0,d0
-    move.l  mbits1,d1
-    move.l  mx0,d2
+    move.l  dbg,d0
     rts
 
 ;------interrupts----------
-    CNOP    4,0
 keyint:
     movem.l d6/a0-a2,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #3,d0               ; PORTS handler
     beq     .exit
+    bra     .exit ; DDEBUG
     move.l  #CIAA,a0            ; CIA-A base
     btst    #3,CIAICR(a0)       ; test SP bit (???)
     beq     .exit
@@ -330,29 +344,79 @@ keyint:
     movem.l (sp)+,d6/a0-a2
     rte
 
-    CNOP    4,0
 vblankint:
+    movem.l d1-d6/a0-a1,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #5,d0               ; VBLANK handler
     beq     .exit
+    bra     .exit ; DDEBUG
+    btst    #F_DRAW,flags
+    beq     .nodraw
+    bclr    #F_DRAW,flags
+    add.l   #1,dbg
+    move.l  coprpos,d5          ; get copper offset
+    move.l  #bgpl,d6
+    addmod  d5,width,bplsize    ; update start
+    move.l  d5,coprpos
+    add.l   d5,d6               ; copper start
+    move.w  d6,copptrl          ; update copper
+    swap    d6
+    move.w  d6,copptrh
+;   lea     bgpl,a1             ; screen base for copy
+;   move.l  copypos,d4          ; offset for copy
+;   move.l  d4,d5
+;   add.l   d5,a1               ; copy address
+;   addmod  d4,width,bplsize    ; increment
+;   move.l  d4,copypos
+;   clr.w   d1
+;   jsr     drawpat             ; draw pattern 0
+;   add.l   #32,a1
+;   move.w  #1,d1
+;   jsr     drawpat             ; draw pattern 1
+;   lea     bgplhi,a1           ; screen base for render
+;   move.l  bplpos,d4           ; offset for render
+;   move.l  d4,d5
+;   add.l   d5,a1               ; render address
+;   addmod  d4,width,bplsize    ; increment
+;   move.l  d4,bplpos
+;   clr.w   d1
+;   jsr     drawpat             ; draw pattern 0
+;   add.l   #32,a1
+;   move.w  #1,d1
+;   jsr     drawpat             ; draw pattern 1
+.nodraw:
 .exit:
     move.w  #$4020,_INTREQ      ; clear INTREQ
     move.w  #$4020,_INTREQ      ; ... twice
+    movem.l (sp)+,d1-d6/a0-a1
     rte
 
-    CNOP    4,0
 timerint:
-    movem.l a0,-(sp)
+    move.l  a0,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #13,d0              ; PORTS handler
     beq     .exit
+    bra     .exit ; DDEBUG
     move.l  #CIAB,a0            ; CIA-B base
     btst    #1,CIAICR(a0)
     beq     .exit
+    add.b   #1,count            ; increment count mod countmod
+    cmp.b   #countmod,count     ; check for mod divider
+    bne     .nomod
+    clr.b   count
+.nomod:
+    move.b  cpos,d0             ; increment mod position
+    add.b   #1,d0
+    cmp.b   #(csize/2),d0       ; if halfway, request render
+    bne.b   .nodraw
+    bset    #F_DRAW,flags       ; set draw bit
+.nodraw
+    and.b   #(csize-1),d0       ; mod and test 0
+    move.b  d0,cpos
 .exit:
     move.w  #$6000,_INTREQ      ; clear INTREQ
     move.w  #$6000,_INTREQ      ; ... twice
-    movem.l (sp)+,a0
+    move.l  (sp)+,a0
     rte
 
 ;-----tables---------------
@@ -381,6 +445,24 @@ gfxbase:
     dc.l    0
 gfxname:
     dc.b    "graphics.library",0
+  
+;-----locals---------------
+    SECTION amd,DATA
+    EVEN
+copypos:
+    dc.l    0                   ; bitplane offset for copy
+bplpos:
+    dc.l    0                   ; bitplane offset for render
+coprpos:
+    dc.l    0                   ; copper offset  
+drawpos:
+    dc.w    0                   ; horiz. position for patterns
+    dc.w    0
+    EVEN
+cpos:
+    dc.b    0                   ; scroll position mod 8
+count:
+    dc.b    0                   ; step counter
 
 ;-----wave buffers---------
     SECTION amdc,DATA_C
@@ -390,37 +472,27 @@ wav0:
 wav1:
     ds.w    TABSIZE
 
-;-----sprite data----------
-    SECTION amdc,DATA_C
-    CNOP    0,4
-spr0ctl:
-    ds.w    2
-spr0:
-    ds.w    patsize*2
-spr0end:
-    ds.w    2
-spr1ctl:
-    ds.w    2
-spr1:
-    ds.w    patsize*2
-spr1end:
-    ds.w    2
-    
 ;-----cell buffers---------
     SECTION amdc,DATA_C
     CNOP    0,4
 buf:
     ds.l    hsizel              ; state buffer 
-    SECTION amd,DATA
     CNOP    0,4
+spr0:
+    ds.l    sprsizel            ; display pattern 0
+spr1:
+    ds.l    sprsizel            ; display pattern 1
+
+    SECTION amd,DATA
+    EVEN
 pat0:
-    ds.l    psizel              ; pattern 0
+    dc.l    0                   ; pattern address 0
 pat1:
-    ds.l    psizel              ; pattern 1
+    dc.l    0                   ; pattern address 1
 mask0:
-    ds.l    psizel              ; pattern mask 0
+    dc.l    0                   ; mask address 0
 mask1:
-    ds.l    psizel              ; pattern mask 1
+    dc.l    0                   ; mask address 1
     CNOP    0,4
 mbits0:
     dc.l    0                   ; match mask 0
@@ -430,6 +502,10 @@ mx0:
     dc.w    0
 mx1:
     dc.w    0
+dbg:
+    dc.l    0
+ptmp:
+    dc.b    0
 
 ;-----copper lists---------
     SECTION amdc,DATA_C
@@ -449,16 +525,17 @@ coplist:
     CNOP    0,4
 bgpl:
     ds.b    bplsize
+bgplhi:
+    ds.b    bplsize
 
 ;-----functions------------
     SECTION amc,CODE
-
-;-----loadspr(d1)-------
-; load patterns at index d1 into
-; sprite buffer.
-; TODO: negate
+   
+;-----loadpat(d1)-------
+; load patterns at index d1 into buffers spr0/1
+; and set pointers.
     CNOP    0,4
-loadspr:
+loadpat:
     lea     patterns,a6
     lea     masks,a5
     lea     mmap,a4
@@ -466,42 +543,79 @@ loadspr:
     move.w  d1,d0
     lsl.w   #patsl,d1           ; form pattern index
     move.w  d0,d2               
-    lsl.w   #mmapsl,d2          ; form map index
     lsl.w   #invsl,d0           ; form invert index
+    lsl.w   #mmapsl,d2          ; form map index
     move.w  (a4,d2.w),d3        ; load map offset for first pattern
+    lea     (a6,d1.w),a1        ; pattern 0 address
+    lea     (a5,d3.w),a2        ; mask 0 address
+    move.l  a1,pat0
+    move.l  a2,mask0
     lea     spr0,a2             ; first sprite
-    move.w  #patsize/2-1,d6     ; loop counter
-.load0:
-    move.w  (a6,d1.w),d4        ; load sprite word
-    btst    #0,(a3,d0.w)        ; test invert bit
-    bne     .pos0
-    neg.w   d4                  ; negate bits
-.pos0
-    and.w   (a5,d3.w),d4        ; and with mask
-    move.w  d4,(a2)+            ; write high word
-    move.w  #0,(a2)+            ; write low word
-    add.w   #2,d1               ; next pattern word
-    add.w   #2,d3               ; next mask word
-    dbra    d6,.load0
-    move.l  #0,(a2)             ; write stop words
-    add.w   #1,d0               ; next invert bit
-    add.w   #2,d2               ; next map offset
-    move.w  (a4,d2.w),d3        ; get next mask offset
-    lea     spr1,a2             ; second sprite
-    move.w  #patsize/2-1,d6     ; loop counter
-.load1:
-    move.w  (a6,d1.w),d4        ; load sprite word
-    btst    #0,(a3,d0.w)        ; test invert bit
-    bne     .pos1
-    neg.w   d4                  ; negate bits
-.pos1
-    and.w   (a5,d3.w),d4        ; and with mask
-    move.w  d4,(a2)+            ; write high word
-    move.w  #0,(a2)+            ; write low word
-    add.w   #2,d1               ; next pattern word
-    add.w   #2,d3               ; next mask word
-    dbra    d6,.load1
-    move.l  #0,(a2)             ; write stop words
+    move.w  #pwidth-1,d6        ; loop counter
+.loada:
+    move.b  (a6,d1.w),d4        ; load sprite line
+    cmp.b   #0,(a3,d0.w)        ; test invert bit
+    beq     .posa
+    neg.b   d4                  ; negate bits
+.posa:
+    move.b  (a5,d3.w),d5
+    and.b   (a5,d3.w),d4        ; and with mask
+    move.b  d4,ptmp             ; stash 
+    clr.w   d5                  ; line counter
+    move.w  #pwidth-1,d5        ; loop counter/bit
+.expa:
+    clr.b   d4
+    btst    d5,ptmp             ; test pattern bit
+    beq     .offa
+    move.b  #$7E,d4
+.offa:
+    move.l  a2,a1               ; copy start address
+    REPT csize-2
+    add.l   #sprwidth,a1
+    move.b  d4,(a1)
+    ENDR
+    add.l   #1,a2               ; next sprite column
+    dbra    d5,.expa
+    add.w   #1,d1               ; next pattern byte
+    add.w   #1,d3               ; next mask byte
+    add.l   #sprwidth*(csize-1),a2  ; next cell line
+    dbra    d6,.loada
+.startb:
+    move.w  (a4,d2.w),d3        ; load map offset for first pattern
+    lea     (a6,d1.w),a1        ; pattern 0 address
+    lea     (a5,d3.w),a2        ; mask 0 address
+    move.l  a1,pat1
+    move.l  a2,mask1
+    lea     spr1,a2             ; first sprite
+    move.w  #pwidth-1,d6        ; loop counter
+.loadb:
+    move.b  (a6,d1.w),d4        ; load sprite line
+    cmp.b   #0,(a3,d0.w)        ; test invert bit
+    beq     .posb
+    neg.b   d4                  ; negate bits
+.posb:
+    move.b  (a5,d3.w),d5
+    and.b   (a5,d3.w),d4        ; and with mask
+    move.b  d4,ptmp             ; stash 
+    clr.w   d5                  ; line counter
+    move.w  #pwidth-1,d5        ; loop counter/bit
+.expb:
+    clr.b   d4
+    btst    d5,ptmp             ; test pattern bit
+    beq     .offb
+    move.b  #$7E,d4
+.offb:
+    move.l  a2,a1               ; copy start address
+    REPT csize-2
+    add.l   #sprwidth,a1
+    move.b  d4,(a1)
+    ENDR
+    add.l   #1,a2               ; next sprite column
+    dbra    d5,.expb
+    add.w   #1,d1               ; next pattern byte
+    add.w   #1,d3               ; next mask byte
+    add.l   #sprwidth*(csize-1),a2  ; next cell line
+    dbra    d6,.loadb
     rts
     
 ;-----setpat(d0)-----------
@@ -521,42 +635,7 @@ setpat:
     sub.w   #numpat,d1
 .inrange:
     move.w  d1,pattern
-    jsr     loadspr
-    rts 
-
-;-----match()--------------
-; Match the current patterns against the buffer,
-; setting mbits[0,1] appropriately.
-; buffer/patterns are packed
-    CNOP    0,4
-match:
-    lea     buf,a6              ; window base
-    lea     pat0,a4             ; pattern 0 base
-    lea     pat1,a5             ; pattern 1 base
-    clr.l   mbits0              ; match set 0
-    clr.l   mbits1              ; match set 1
-    move.w  #31,d6              ; loop counter
-    move.w  bpos,d5             ; window position
-    move.l  (a6,d5.w),d2        ; load row
-    move.b  mask0,d3
-    move.b  mask1,d4
-.loop:
-    move.b  d2,d1               ; get next 8 bits
-    and.b   d3,d1               ; apply mask 0
-    cmp.b   (a4),d1             ; check
-    bne.b   .nomatch0
-    moveq   #0,d0
-    jsr     matchdown           ; check remainder
-.nomatch0
-    move.b  d2,d1               ; get next 8 bits
-    and.b   d4,d1               ; apply mask 1
-    cmp.b   (a5),d1             ; check
-    bne.b   .nomatch1           
-    moveq   #1,d0
-    jsr     matchdown           ; check remainder
-.nomatch1:
-    ror.l   #1,d2               ; next position
-    dbra    d6,.loop
+    jsr     loadpat
     rts 
 
 ;-----matchdown()-------------
@@ -572,8 +651,8 @@ match:
 matchdown:
     movem.l d3-d6,-(sp)         ; save regs
     move.w  d0,d3               ; save pattern index   
-    lea     mask0,a3            ; mask base
-    lea     pat0,a2             ; pattern base
+    move.l  mask0,a3            ; mask base
+    move.l  pat0,a2             ; pattern base
     lsl.w   #psizelog,d0        ; pattern/mask offset (0,1)
     add.w   #1,d0               ; next row
     add.w   #4,d5               ; next window row
@@ -606,6 +685,43 @@ matchdown:
     movem.l (sp)+,d3-d6         ; restore regs
     rts    
   
+;-----match()--------------
+; Match the current patterns against the buffer,
+; setting mbits[0,1] appropriately.
+; buffer/patterns are packed
+    CNOP    0,4
+match:
+    lea     buf,a6              ; window base
+    move.l  pat0,a4             ; pattern 0 base
+    move.l  pat1,a5             ; pattern 1 base
+    move.l  mask0,a2            ; mask 0 base
+    move.l  mask1,a3            ; mask 1 base
+    clr.l   mbits0              ; match set 0
+    clr.l   mbits1              ; match set 1
+    move.w  #31,d6              ; loop counter
+    move.w  bpos,d5             ; window position
+    move.l  (a6,d5.w),d2        ; load row
+    move.b  (a2),d3             ; load mask 0 byte
+    move.b  (a3),d4             ; load mask 1 byte
+.loop:
+    move.b  d2,d1               ; get next 8 bits
+    and.b   d3,d1               ; apply mask 0
+    cmp.b   (a4),d1             ; check
+    bne.b   .nomatch0
+    moveq   #0,d0
+    jsr     matchdown           ; check remainder
+.nomatch0
+    move.b  d2,d1               ; get next 8 bits
+    and.b   d4,d1               ; apply mask 1
+    cmp.b   (a5),d1             ; check
+    bne.b   .nomatch1           
+    moveq   #1,d0
+    jsr     matchdown           ; check remainder
+.nomatch1:
+    ror.l   #1,d2               ; next position
+    dbra    d6,.loop
+    rts 
+
 ;-----findmatch()------------
 ; checks mbits0, mbits1 for a pattern
 ; match. Sets d0,d1 to the match index + 1 or
@@ -651,6 +767,33 @@ findmatch:
     move.b  d6,d1
 .done:
     rts
+
+;-----drawpat(d0,d1,a1)------
+; Render the pattern indicated by d1 at 
+; to address a1 at offset d0.
+; TODO: can use the blitter LF to invert and even mask?
+    CNOP    0,4
+drawpat:
+    waitblt
+    lea     (a1,d0.w),a2      ; dest pointer
+    move.l  a2,_BLTDPT        ; D address
+    move.l  a2,_BLTCPT        ; C address
+    lea     spr0,a0           ; pattern base 
+    cmp.w   #0,d1
+    beq     .idx0
+    lea     spr1,a0
+.idx0:
+    move.l  a0,_BLTAPT        ; source pointer
+    clr.w   _BLTAMOD          ; set A modulo
+    move.w  #coff*2,_BLTDMOD  ; set D modulo
+    move.w  #coff*2,_BLTCMOD  ; set C modulo
+    move.w  #$0BFA,_BLTCON0   ; enable A,C,D, LF A + C
+    move.w  #sprwidthw,d0     ; word count
+    move.w  #csize*pwidth,d1  ; height
+    lsl.w   #6,d1             ; in bit pos 6
+    or.w    d1,d0             ; form blit size
+    move.w  d0,_BLTSIZE       ; start blit
+    rts 
 
 ;------------------------------------------------------------------------------
     end

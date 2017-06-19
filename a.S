@@ -61,8 +61,6 @@ bsize       equ stwidth*csize           ; render buffer size
 bsizel      equ bsize/4                 ; render buffer size in dwords
 coff        equ (bplwidth-stwidth)/2    ; offset of cell display in bytes
 coffw       equ (bplwidthw-stwidthw)/2  ; offset of cell display in words
-kbsizelog   equ 3                       ; keyboard buffer size log 2
-kbsize      equ (1<<kbsizelog)          ; keyboard buffer size
 
 ;-----color defs-----------
 fgbase      equ $0555
@@ -218,9 +216,6 @@ init:
     clr.l   (a0)+
     dbra    d4,.initmaj
 
-;-----other init-----------
-    clr.b   key
-
 ;-----setup copper list----
     IFND NOGRAPH
     move.l  #bgpl,d0            ; set up bg pointer
@@ -250,8 +245,8 @@ init:
     move.l  #CIAB,a6            ; CIA-B base
     move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
     move.b  #$7F,CIAICR(a6)     ; clear CIA-B interrupts
-    and.b   #$18,CIACRB(a5)     ; CIA-A TA: one-shot, KB input mode
-    and.b   #$C0,CIACRB(a6)     ; CIA-B TB: continuous, pulse, PB6OFF
+    and.b   #$18,CIACRA(a5)     ; CIA-A TA: one-shot, KB input mode
+    and.b   #$C0,CIACRA(a6)     ; CIA-B TB: continuous, pulse, PB6OFF
     move.b  #(period&$FF),CIATBLO(a6) ; set CIA-B timer B period 
     move.b  #(period>>8),CIATBHI(a6)  ; ..for timer interrupt
     move.b  #(kbhs&$FF),CIATBLO(a5)   ; set CIA-A timer B period
@@ -666,7 +661,6 @@ bgplhi:
     CNOP    0,4
 cbuf:
     ds.b    stwidth*csize     ; state display buffer
-    CNOP    0,4
 
 ;-----functions------------
     SECTION amc,CODE
@@ -850,8 +844,7 @@ drawstate:
     move.l  #$7E000000,d1     ; bit pattern
     clr.l   d2                ; current word
 .drawloop:
-    move.b  (a0)+,d3          ; current cell
-    cmp.b   #0,d3             ; test
+    cmp.b   #0,(a0)+          ; test current cell
     beq     .off 
     or.l    d1,d2             ; set bit 
 .off: 
