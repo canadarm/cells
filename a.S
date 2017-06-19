@@ -170,8 +170,6 @@ init:
     move.w  #30,rule
     lea     state,a0
     move.b  #1,16(a0)
-    move.l  #0,copypos
-    move.l  #0,bplpos
 
 ;-----init sequence--------
     lea     seqtrig,a0
@@ -412,33 +410,30 @@ vblankint:
     btst    #F_DRAW,flags
     beq     .nodraw
     bclr    #F_DRAW,flags
-    move.l  coprpos,d5          ; get copper offset
-    move.l  #bgpl,d6
+    move.w  coprpos,d5          ; get copper offset
     addmod  d5,width,bplsize    ; update start
-    move.l  d5,coprpos
-    add.l   d5,d6               ; copper start
+    move.w  d5,coprpos
+    lea     bgpl,a0
+    lea     (a0,d5.w),a1
+    move.l  a1,d6
     move.w  d6,copptrl          ; update copper
-    swap    d6
+    swap    d6 
     move.w  d6,copptrh
-    lea     bgpl0,a1            ; screen base for copy
-    move.l  copypos,d4          ; offset for copy
-    move.l  d4,d5
-    add.l   #coff,d5
-    add.l   d5,a1               ; copy address
-    addmod  d4,width,bplsize    ; increment
-    move.l  d4,copypos
+    lea     bgpl,a0             ; screen base for copy
+    move.w  bplpos,d4           ; offset for copy
+    move.w  d4,d5
+    add.w   #coff,d5
+    lea     (a0,d5.w),a1        ; copy address
     lea     cbuf,a0             ; source address
     jsr     copystate
-.nocopy: 
     move.w  drawpos,d0          ; state position
-    bsr     drawstate           ; copy state
-    lea     bgplhi0,a1          ; screen base for render
-    move.l  bplpos,d4           ; offset for render
-    move.l  d4,d5
-    add.l   #coff,d5
-    add.l   d5,a1               ; render address
+    jsr     drawstate           ; copy state
+    lea     bgplhi,a0           ; screen base for render
     addmod  d4,width,bplsize    ; increment
-    move.l  d4,bplpos
+    move.w  d4,bplpos
+    move.w  d4,d5
+    add.w   #coff,d5
+    lea     (a0,d5.w),a1        ; render address
     lea     cbuf,a0             ; source address
     jsr     copystate           ; render new state
 .nodraw:
@@ -533,12 +528,10 @@ drawpos:
     dc.w    0                   ; render positon
 hpos:
     dc.w    0                   ; history position
-copypos:
-    dc.l    0                   ; bitplane offset for copy
 bplpos:
-    dc.l    0                   ; bitplane offset for render
+    dc.w    0                   ; bitplane offset for render
 coprpos:
-    dc.l    0                   ; copper offset  
+    dc.w    0                   ; copper offset  
 flags:
     dc.w    0
 rule:

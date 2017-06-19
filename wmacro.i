@@ -76,10 +76,10 @@ decmod      MACRO
 .nowrap\@:
     ENDM
 addmod      MACRO
-    add.l   #(\2),\1
-    cmp.l   #(\3),\1
+    add.w   #(\2),\1
+    cmp.w   #(\3),\1
     blt.b   .nowrap\@
-    sub.l   #(\3),\1
+    sub.w   #(\3),\1
 .nowrap\@:
     ENDM
 

@@ -57,13 +57,16 @@ sprsizew    equ (sprsize/2)
 ;-----buffer defs----------
 bsize       equ stwidth*csize           ; render buffer size
 bsizel      equ bsize/4                 ; render buffer size in dwords
-coff        equ (bplwidth-sprwidth)/2   ; offset of cell display in bytes
-coffw       equ (bplwidthw-sprwidthw)/2 ; offset of cell display in words
+coff        equ (bplwidth-sprwidth)/2   ; modulo for patterns in bytes
+coffw       equ (bplwidthw-sprwidthw)/2 ; modulo for patterns in words
+celloff     equ (bplwidth-stwidth)/2    ; cell offset in bytes
+celloffw    equ (bplwidthw-stwidthw)/2  ; cell offset in words
 
 ;-----flag bits------------
 F_DRAW      equ 0               ; render next vblank
 F_KEY       equ 1               ; key pressed
 F_DATA      equ 2               ; data on LPT
+F_MATCH     equ 3               ; match hit
 F_ERR       equ 15              ; error exit
 
 ;-----sequencer defs-------
@@ -83,6 +86,10 @@ F_NOTEON    equ 7
 period      equ 14800           ; timer interrupt period
 kbhs        equ 95              ; keyboard handshake duration - 02 clocks
 countmod    equ 64              ; 16th notes between mode transition
+
+;-----color defs------------
+ctabsize    equ   8
+cskip       equ   height/ctabsize
 
 ;-----entry point----------
 ; most of the CIA saving is trying
@@ -131,16 +138,19 @@ init:
     ENDC
     
 ;-----init playfield-------
-    move.w  #$1200,_BPLCON0     ; 
+    move.w  #$2200,_BPLCON0     ; two planes, composite
     move.w  #00,_BPLCON1        ; hscroll = 0
     move.w  #0,_BPL1MOD         ; mod for odd planes (bg)
+    move.w  #0,_BPL1MOD         ; mod for even planes (bg)
     move.w  #$0038,_DDFSTRT     ; data-fetch start = $38/3Chi
     move.w  #$00D0,_DDFSTOP     ;            stop  = $D0/D4hi
     move.w  #$2100,_DIWHIGH     ; diw-high  = msb set for stop
     move.w  #$2C81,_DIWSTRT     ; diw-start = $2C81
     move.w  #$F4C1,_DIWSTOP     ; diw-stop  = $F4C1 (NTSC, PAL 2CC1)
     move.w  #$0111,_COLOR00     ; bg color (0) 
-    move.w  #$0FFF,_COLOR01     ; fg color (1)
+    move.w  #$0391,_COLOR01     ; fg color (1)
+    move.w  #$0FFF,_COLOR02     ; fg color (2)
+    move.w  #$0913,_COLOR03     ; fg color (3)
 
 ;-----init bitplanes-------
     IFND DEBUG
@@ -150,8 +160,7 @@ init:
     clr.l   (a0)+
     dbra    d0,.initbpl
     ENDC
-    move.l  #0,copypos
-    move.l  #width,bplpos
+    move.l  #0,bplpos
 
 ;-----init buffers----------
     IFND DEBUG
@@ -168,20 +177,31 @@ init:
 .buflp:
     move.b  #$80,(a0)+ 
     dbra    d6,.buflp
-; test
-    lea     bgpl,a1             ; screen base for render
-    move.w  #0,d1
-    move.w  #4,d0
-    jsr     drawpat             ; draw pattern 0
-    move.w  #1,d1
-    move.w  #8,d0
-    jsr     drawpat             ; draw pattern 0
 
 ;-----setup copper list----
     move.l  #bgpl,d0            ; set up bg pointer
     move.w  d0,copptrl
     swap    d0
     move.w  d0,copptrh
+    move.l  #fgpl,d0            ; set up fg pointer
+    move.w  d0,copptr2l
+    swap    d0
+    move.w  d0,copptr2h
+    lea     coplist,a1          ; copper list position
+    lea     ctab,a2             ; color table base
+    move.w  #0,d0               ; color list index
+    move.w  #$0001,d5           ; init wait position
+    move.w  #cskip,d4           ; period in bit 8
+    lsl.w   #8,d4
+    move.w  #ctabsize-1,d6      ; loop counter
+.clist:
+    C_WAITR a1,d5,#$FF00        ; WAIT for next line
+    move.w  (a2,d0.w),d3        ; load color
+    C_MOVE  a1,COLOR01_,d3
+    add.w   d4,d5               ; update WAIT position
+    add.w   #2,d0               ; next color
+    dbra    d6,.clist
+    C_ENDL  a1                  ; end list
     IFND DEBUG
     move.l  #copstart,_COP1LCH 
     ENDC
@@ -321,7 +341,6 @@ keyint:
     move.w  _INTREQR,d0         ; check req mask
     btst    #3,d0               ; PORTS handler
     beq     .exit
-    bra     .exit ; DDEBUG
     move.l  #CIAA,a0            ; CIA-A base
     btst    #3,CIAICR(a0)       ; test SP bit (???)
     beq     .exit
@@ -349,42 +368,56 @@ vblankint:
     move.w  _INTREQR,d0         ; check req mask
     btst    #5,d0               ; VBLANK handler
     beq     .exit
-    bra     .exit ; DDEBUG
     btst    #F_DRAW,flags
     beq     .nodraw
     bclr    #F_DRAW,flags
-    add.l   #1,dbg
-    move.l  coprpos,d5          ; get copper offset
-    move.l  #bgpl,d6
+    move.w  coprpos,d5          ; get copper offset
     addmod  d5,width,bplsize    ; update start
-    move.l  d5,coprpos
-    add.l   d5,d6               ; copper start
+    move.w  d5,coprpos
+    lea     bgpl,a0
+    lea     (a0,d5.w),a1        ; copper start
+    move.l  a1,d6
     move.w  d6,copptrl          ; update copper
     swap    d6
     move.w  d6,copptrh
-;   lea     bgpl,a1             ; screen base for copy
-;   move.l  copypos,d4          ; offset for copy
-;   move.l  d4,d5
-;   add.l   d5,a1               ; copy address
-;   addmod  d4,width,bplsize    ; increment
-;   move.l  d4,copypos
-;   clr.w   d1
-;   jsr     drawpat             ; draw pattern 0
-;   add.l   #32,a1
-;   move.w  #1,d1
-;   jsr     drawpat             ; draw pattern 1
-;   lea     bgplhi,a1           ; screen base for render
-;   move.l  bplpos,d4           ; offset for render
-;   move.l  d4,d5
-;   add.l   d5,a1               ; render address
-;   addmod  d4,width,bplsize    ; increment
-;   move.l  d4,bplpos
-;   clr.w   d1
-;   jsr     drawpat             ; draw pattern 0
-;   add.l   #32,a1
-;   move.w  #1,d1
-;   jsr     drawpat             ; draw pattern 1
+    lea     bgpl0,a0            ; screen base for copy
+    move.w  bplpos,d4           ; offset for copy
+    cmp.l   #0,d4               ; clear on reset
+    bne.b   .noclearlo
+    lea     bgpl,a1
+    jsr     clearpl
+.noclearlo:
+    move.w  d4,d5
+    add.w   #celloff,d5
+    lea     (a0,d5.w),a1        ; copy address
+    clr.w   d0
+    clr.w   d1
+    jsr     drawpat             ; draw pattern 0
+    lea     bgplhi0,a0          ; screen base for render
+    addmod  d4,width,bplsize    ; increment
+    move.w  d4,bplpos
+    cmp.l   #0,d4               ; clear on reset
+    bne.b   .noclearhi
+    lea     bgplhi,a1
+    jsr     clearpl
+.noclearhi:
+    move.w  d4,d5 
+    add.w   #celloff,d5
+    lea     (a0,d5.w),a1        ; render address
+    clr.w   d0
+    clr.w   d1
+    jsr     drawpat             ; draw pattern 0
+    lea     fgpl0,a1            ; get fg pointer
+    jsr     clearrow            ; clear fg row
 .nodraw:
+    btst    #F_MATCH,flags
+    beq     .exit
+    bclr    #F_MATCH,flags
+    lea     fgpl0,a0            ; get fg pointer
+    lea     celloff(a0),a1
+    clr.w   d0
+    clr.w   d1
+    jsr     drawpat             ; draw pattern 0
 .exit:
     move.w  #$4020,_INTREQ      ; clear INTREQ
     move.w  #$4020,_INTREQ      ; ... twice
@@ -396,7 +429,6 @@ timerint:
     move.w  _INTREQR,d0         ; check req mask
     btst    #13,d0              ; PORTS handler
     beq     .exit
-    bra     .exit ; DDEBUG
     move.l  #CIAB,a0            ; CIA-B base
     btst    #1,CIAICR(a0)
     beq     .exit
@@ -404,6 +436,7 @@ timerint:
     cmp.b   #countmod,count     ; check for mod divider
     bne     .nomod
     clr.b   count
+    bset    #F_MATCH,flags
 .nomod:
     move.b  cpos,d0             ; increment mod position
     add.b   #1,d0
@@ -449,12 +482,10 @@ gfxname:
 ;-----locals---------------
     SECTION amd,DATA
     EVEN
-copypos:
-    dc.l    0                   ; bitplane offset for copy
 bplpos:
-    dc.l    0                   ; bitplane offset for render
+    dc.w    0                   ; bitplane offset for render
 coprpos:
-    dc.l    0                   ; copper offset  
+    dc.w    0                   ; copper offset  
 drawpos:
     dc.w    0                   ; horiz. position for patterns
     dc.w    0
@@ -517,16 +548,43 @@ copptrl:
     dc.w    BPL1PTH_
 copptrh:
     dc.w    0
+    dc.w    BPL2PTL_
+copptr2l:  
+    dc.w    0
+    dc.w    BPL2PTH_
+copptr2h:
+    dc.w    0
 coplist:
     dcb.l   64, CL_END
 
 ;-----bitplanes------------
     SECTION ambss,BSS_C
     CNOP    0,4
+bgpl0:
+    ds.b    width*pwidth
 bgpl:
-    ds.b    bplsize
+    ds.b    bplsize-width*pwidth
+bgplhi0:
+    ds.b    width*pwidth
 bgplhi:
     ds.b    bplsize
+fgpl:
+    ds.b    bplsize-width*pwidth
+fgpl0:
+    ds.b    width*pwidth
+
+;-----color tables---------
+    SECTION amd,DATA
+    CNOP    0,4
+ctab:
+    dc.w    $0003
+    dc.w    $0014
+    dc.w    $0015
+    dc.w    $0126
+    dc.w    $0127
+    dc.w    $0138
+    dc.w    $0239
+    dc.w    $024A
 
 ;-----functions------------
     SECTION amc,CODE
@@ -794,6 +852,37 @@ drawpat:
     or.w    d1,d0             ; form blit size
     move.w  d0,_BLTSIZE       ; start blit
     rts 
+
+;-----clearrow(a1)----------
+; clear the pwidth*csize lines starting at
+; the address in a1.
+    CNOP    0,4
+clearrow:
+    waitblt
+    move.l  a1,_BLTDPT        ; dest ptr
+    clr.w   _BLTDMOD          ; set D modulo (0)
+    move.w  #$0100,_BLTCON0   ; enable only D (clear)
+    move.w  #bplwidthw,d0     ; word count
+    move.w  #csize*pwidth,d1  ; height
+    lsl.w   #6,d1             ; .. in pos 6
+    or.w    d1,d0             ; form blit size
+    move.w  d0,_BLTSIZE       ; start blit
+    rts
+
+;-----clearpl(a1)------------
+; zero out the bit plane at a1.
+    CNOP    0,4
+clearpl:
+    waitblt
+    move.l  a1,_BLTDPT
+    clr.w   _BLTDMOD          ; set D modulo (0)
+    move.w  #$0100,_BLTCON0   ; enable only D (clear)
+    move.w  #bplwidthw,d0     ; word count
+    move.w  #height,d1        ; height
+    lsl.w   #6,d1             ; .. in pos 6
+    or.w    d1,d0             ; form blit size
+    move.w  d0,_BLTSIZE       ; start blit
+    rts
 
 ;------------------------------------------------------------------------------
     end
