@@ -215,6 +215,9 @@ init:
     move.w  #TABSIZE,4(a6)
     clr.w   8(a6)
 
+;-----init rng-------------
+    jsr     seed
+
 ;-----setup copper list----
     move.l  #bgpl,d0            ; set up bg pointer
     move.w  d0,copptrl
@@ -295,8 +298,8 @@ init:
 .nokey:
     btst    #F_MOD,flags
     beq     .nomod
-    bclr    #F_KEY,flags
-    jsr     modulate
+    bclr    #F_MOD,flags
+;   jsr     modulate
 .nomod
     btst    #F_DATA,flags
     beq     .nodata
@@ -1199,11 +1202,13 @@ handlekb:
     lsl.w   #stwidthlog,d4      ; ..
     move.w  #ncells-1,d5        ; loop counter
 .randloop:
-    move.b  _VHPOSR,d6
-    and.w   #1,d6
+    jsr     prng
+    move.b  d0,d6
+    lsl.b   #3,d6
+    or.b    d0,d6
+    and.b   #1,d6
     move.b  d6,(a1,d4.w)
     addq    #1,d4
-    btst    #1,_VHPOSR
     dbra    d5,.randloop
     bra     .done
 .reset1:
@@ -1414,6 +1419,32 @@ playlead:
     add.l   #sclen,a4         ; next scale
     dbra    d6,.loop
     rts
+
+    IFD TEST
+;-----seed()---------------
+; Seed the prng
+    CNOP      0,4
+seed:
+    move.l    #$deadbeef,d0
+    move.l    #$1234a1b2,d1
+    move.w    #4,d2
+.loop:
+    swap      d0
+    add.l     d1,d0
+    add.l     d0,d1
+    dbra      d2,.loop    
+    movem.l   d0-d1,rng
+    rts
+prng:
+    movem.l   rng,d0-d1
+    swap      d0
+    add.l     d1,d0
+    add.l     d0,d1
+    movem.l   d0-d1,rng
+    rts
+rng:
+    ds.l      2 
+    ENDC
 
 ;------------------------------------------------------------------------------
     end

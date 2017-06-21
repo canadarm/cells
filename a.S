@@ -170,6 +170,7 @@ init:
     move.w  #30,rule
     lea     state,a0
     move.b  #1,16(a0)
+    jsr     seed
 
 ;-----init sequence--------
     lea     seqtrig,a0
@@ -1002,10 +1003,13 @@ handlekb:
     lsl.w   #stwidthlog,d4      ; ..
     move.w  #ncells-1,d5        ; loop counter
 .randloop:
-    move.b  _VHPOSR,d6
-    and.w   #2,d6
+    jsr     prng
+    move.b  d0,d6
+    lsl.b   #2,d6
+    or.b    d0,d6
+    and.b   #1,d6
     move.b  d6,(a1,d4.w)
-    addq    #1,d4
+    add.w   #1,d4
     dbra    d5,.randloop
     bra     .done
 .reset1:
@@ -1149,9 +1153,35 @@ setpat:
     move.w  d1,pattern
     lea     rules,a6 
     lsl.w   #rulesl,d1
-    move.b  rulen(a6,d1.w),ruleb
-    move.b  rulep(a6,d1.w),negateb
+    move.b  0(a6,d1.w),ruleb
+    move.b  1(a6,d1.w),negateb
     rts
+
+;-----seed()---------------
+; Seed the prng
+;-----prng()---------------
+; get prn in d0.l
+    CNOP      0,4
+seed:
+    move.l    #$deadbeef,d0
+    move.l    #$1234a1b2,d1
+    move.w    #4,d2
+.loop:
+    swap      d0
+    add.l     d1,d0
+    add.l     d0,d1
+    dbra      d2,.loop    
+    movem.l   d0-d1,rng
+    rts
+prng:
+    movem.l   rng,d0-d1
+    swap      d0
+    add.l     d1,d0
+    add.l     d0,d1
+    movem.l   d0-d1,rng
+    rts
+rng:
+    ds.l      2 
 
 ;------------------------------------------------------------------------------
     end
