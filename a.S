@@ -1101,7 +1101,7 @@ pack:
     lsl.w   #stwidthlog,d0    
     move.w  #ncells-1,d6      ; loop counter
     move.l  #$80000000,d1     ; bit mask
-    move.w  #0,d2             ; bit buffer
+    clr.l   d2                ; bit buffer
 .loop:
     cmp.b   #0,(a6,d0.w)      ; test byte
     beq.b   .next

@@ -73,7 +73,6 @@ F_MATCH     equ 5               ; match on either
 F_MOD       equ 6
 F_ENV       equ 7               ; update envelopes
 F_PLAY      equ 8               ; play next interval
-F_ERR       equ 10              ; error exit
 
 ;-----sequencer defs-------
 E_ATT       equ 0
@@ -145,6 +144,7 @@ init:
     ENDC
     
 ;-----init playfield-------
+    IFND DEBUG
     move.w  #$2200,_BPLCON0     ; two planes, composite
     move.w  #00,_BPLCON1        ; hscroll = 0
     move.w  #0,_BPL1MOD         ; mod for odd planes (bg)
@@ -158,6 +158,8 @@ init:
     move.w  #$0391,_COLOR01     ; fg color (1)
     move.w  #$0FFF,_COLOR02     ; fg color (2)
     move.w  #$0FFF,_COLOR03     ; fg color (3)
+    move.w  #$0000,_BLTCON1     ; clear BLTCON1
+    ENDC
 
 ;-----init bitplanes-------
     IFND DEBUG
@@ -194,6 +196,17 @@ init:
     clr.w   d0
     jsr     setpat
 
+    IFD DEBUG
+;   lea     buf,a6
+;   move.l  #%11111111111111111111111111111111,(a6)+
+;   move.l  #%11000100011111111111111111100011,(a6)+
+;   move.l  #%11010101011111111111111111101011,(a6)+
+;   move.l  #%11111111111111111111111111111111,(a6)+
+;   move.l  #%11111111111111111111111111111111,(a6)+
+;   move.l  #%11111111111111111111111111111111,(a6)+
+    jsr     match
+    ENDC
+
 ;-----init wavetables------
     jsr     initwav
     move.l  #_AUD0LC,a6         ; audio base
@@ -216,9 +229,12 @@ init:
     clr.w   8(a6)
 
 ;-----init rng-------------
+    IFND DEBUG
     jsr     seed
+    ENDC
 
 ;-----setup copper list----
+    IFND DEBUG
     move.l  #bgpl,d0            ; set up bg pointer
     move.w  d0,copptrl
     swap    d0
@@ -242,7 +258,6 @@ init:
     add.w   #2,d0               ; next color
     dbra    d6,.clist
     C_ENDL  a1                  ; end list
-    IFND DEBUG
     move.l  #copstart,_COP1LCH 
     ENDC
 
@@ -284,6 +299,7 @@ init:
     move.w  #DMAF_ALLA,_DMACON  ; start DMA
     ENDC
 
+    clr.w   flags
 ;-----frame loop start-------
 .mainloop:
 ;   btst    #F_PLAY,flags
@@ -306,6 +322,12 @@ init:
     bclr    #F_DATA,flags
     jsr     match
 .nodata:
+    cmp.w   #0,err
+    beq     .endmain
+    move.w  #$7FFF,_INTENA      ; turn off interrupts
+.errloop:
+    btst    #6,$bfe001
+    bne     .errloop
 .endmain:
     btst    #6,$bfe001
     bne     .mainloop
@@ -383,10 +405,11 @@ init:
 .return:
 .xx:
     movem.l (sp)+,d1-d6/a0-a6
-    move.w  mx0,d0
-    move.l  #state,d1
-    move.w  bpos,d2
-    move.w  pos,d3
+    move.l  mbits0,d0
+    move.w  mx0,d1
+    move.l  buf+0,d2
+    move.l  buf+4,d3
+    move.l  buf+8,d4
     rts
 
 ;------interrupts----------
@@ -635,16 +658,12 @@ mx1:
     dc.w    0
 dbg:
     dc.l    0
-dbg2:
-    dc.l    0
-dbgm:
+mall0:
+    dc.l    0                   ; match mask 0
+mall1:
+    dc.l    0                   ; match masks 1
+err:
     dc.w    0
-dbgb:
-    dc.w    0
-dbgp:
-    dc.w    0
-dbgf:
-    dc.l    0,0,0,0,0,0,0,0
 ptmp:
     dc.b    0
 
@@ -654,10 +673,10 @@ ptmp:
     CNOP    0,4
 rule:
     dc.w    0
+    ENDC 
     CNOP    0,4
 state:
     ds.b    stsize
-    ENDC 
 
 ;-----leads data-----------
     SECTION amd,DATA
@@ -825,9 +844,10 @@ loadpat:
     add.l   #sprwidth*(csize-1),a2  ; next cell line
     dbra    d6,.loada
 .startb:
-    move.w  (a4,d2.w),d3        ; load map offset for first pattern
-    lea     (a6,d1.w),a1        ; pattern 0 address
-    lea     (a5,d3.w),a2        ; mask 0 address
+    add.w   #2,d2               ; next map offset
+    move.w  (a4,d2.w),d3        ; load map offset for next pattern
+    lea     (a6,d1.w),a1        ; pattern 1 address
+    lea     (a5,d3.w),a2        ; mask 1 address
     move.l  a1,pat1
     move.l  a2,mask1
     lea     spr1,a2             ; first sprite
@@ -947,7 +967,7 @@ setpat:
 ; saves d2-d6,a4-a6, kills d0-d1,a2-a3
     CNOP    0,4
 matchdown:
-    movem.l d3-d6,-(sp)         ; save regs
+    movem.l d2-d6,-(sp)         ; save regs
     move.w  d0,d3               ; save pattern index   
     move.l  mask0,a3            ; mask base
     move.l  pat0,a2             ; pattern base
@@ -971,19 +991,17 @@ matchdown:
 .found:
     ; here d6 is is the number of rotate rights done
     ; the match position is (24 - d6) % 32
+    ; or 32 - (24 - d6) = d6 + (32 - 24)
     neg.w   d6
-    add.w   #24,d6
+    add.w   #56,d6
     and.w   #$1F,d6
     lea     mbits0,a2           ; get match base
     lsl.w   #2,d3               ; match offset (0,1)
     move.l  #1,d0
-;   move.l  #$80000000,d0
-;   lsr.l   d6,d0
-    move.l  #1,d0
     lsl.l   d6,d0
     or.l    d0,(a2,d3.w)        ; set match bit
 .exit:
-    movem.l (sp)+,d3-d6         ; restore regs
+    movem.l (sp)+,d2-d6         ; restore regs
     rts    
   
 ;-----match()--------------
@@ -1035,29 +1053,23 @@ findmatch:
     lea     ldtrig,a6           ; trigger base
     bclr    #F_MATCH0,flags     ; clear bits
     bclr    #F_MATCH1,flags
+    bclr    #F_MATCH,flags      ; ?
 .loop0:
-    moveq   #1,d0
+    move.l  #1,d0
     lsl.l   d5,d0
     and.l   mbits0,d0
-    cmp.l   #0,d0
-    bne     .down0
-    moveq   #1,d0
+    bne     .found0
+    move.l  #1,d0
     lsl.l   d6,d0
     and.l   mbits0,d0
-    cmp.l   #0,d0
     bne     .up0
     add.w   #1,d6
     dbra    d5,.loop0
     bra     .next
-.down0:
-    move.w  d5,mx0
-    bset    #F_MATCH0,flags
-    bset    #F_MATCH,flags
-    bset    #F_PLAY,flags
-    move.b  #1,0(a6)
-    bra     .next
 .up0:
-    move.w  d6,mx0
+    move.w  d6,d5
+.found0:
+    move.w  d5,mx0
     bset    #F_MATCH0,flags
     bset    #F_MATCH,flags
     bset    #F_PLAY,flags
@@ -1066,28 +1078,21 @@ findmatch:
     move.w  #15,d5              ; down counter
     move.w  #16,d6              ; up counter 
 .loop1:
-    moveq   #1,d0
+    move.l  #1,d0
     lsl.l   d5,d0
     and.l   mbits1,d0
-    cmp.l   #0,d0
-    bne     .down1
-    moveq   #1,d0
-    lsl.l   d5,d0
+    bne     .found1
+    move.l  #1,d0
+    lsl.l   d6,d0
     and.l   mbits1,d0
-    cmp.l   #0,d0
     bne     .up1
     add.w   #1,d6
     dbra    d5,.loop1
     bra     .done
-.down1:
-    move.w  d5,mx1
-    bset    #F_MATCH1,flags
-    bset    #F_MATCH,flags
-    bset    #F_PLAY,flags
-    move.b  #1,1(a6)
-    bra     .done
 .up1:
-    move.w  d6,mx1
+    move.w  d6,d5
+.found1:
+    move.w  d5,mx1
     bset    #F_MATCH1,flags
     bset    #F_MATCH,flags
     bset    #F_PLAY,flags
@@ -1101,12 +1106,18 @@ findmatch:
 ; preserves d0,d1
     CNOP    0,4
 drawpat:
+   move.l  #1,d5
+   lsl.l   d0,d5
+   move.l  mall1,d6
+   or.l    d5,d6
+   move.l  d6,mall1
     move.w  d0,d5
     move.w  d1,d6
     lea     (a1,d0.w),a2      ; dest pointer
     move.w  #0,d3             ; shift value
-    and.w   #1,d0             ; test for alignment
-    cmp.w   #0,d0
+    move.w  a2,d4
+    and.w   #1,d4             ; test for alignment
+    cmp.w   #0,d4
     beq     .aligned
     move.w  #$8000,d3         ; align value in 12-15
 .aligned:
@@ -1277,6 +1288,7 @@ nextstate:
     move.w  pos,d0
     jsr     pack
     rts
+    ENDC
 
 ;-----pack()---------------
 ; pack state at d0 into packed as dword.
@@ -1287,7 +1299,7 @@ pack:
     lsl.w   #stwidthlog,d0    
     move.w  #ncells-1,d6      ; loop counter
     move.l  #$80000000,d1     ; bit mask
-    move.w  #0,d2             ; bit buffer
+    clr.l   d2                ; bit buffer
 .loop:
     cmp.b   #0,(a6,d0.w)      ; test byte
     beq.b   .next
@@ -1304,7 +1316,8 @@ pack:
     move.w  d0,bpos
     bset    #F_DATA,flags     ; set data flag
     rts
-
+    
+    IFD TEST
 ;-----drawstate(d0)--------
 ; Render the cell state at position in d0
 ; to render buffer cbuf.
