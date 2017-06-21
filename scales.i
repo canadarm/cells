@@ -1,6 +1,8 @@
 seqlenlog   equ 3
 seqlen      equ (1<<seqlenlog)    ; seq max length in bytes 
 seqcnt      equ 7                 ; number of modes
+sclenlog    equ 5
+sclen       equ (1<<sclenlog)
 modelenlog  equ (seqlenlog+2)     ; mode block size (log)
 modelen     equ (1<<modelenlog)
 
@@ -63,6 +65,8 @@ scale5:
     dc.b    5, 0,2,5,7,10,0,0
 scale6:
     dc.b    7, 0,1,3,5,6,8,10
+scale7:
+    dc.b    7, 0,1,3,5,6,8,12
 
 ;-----period values-----------
     CNOP    0,4

@@ -6,6 +6,7 @@
     INCLUDE "exec/exec_lib.i"
     INCLUDE "exec/nodes.i"
 ;-----macro defs-----------
+TEST        SET 1
 ;DEBUG       SET 1
 
 ;-----screen defs----------
@@ -63,11 +64,16 @@ celloff     equ (bplwidth-stwidth)/2    ; cell offset in bytes
 celloffw    equ (bplwidthw-stwidthw)/2  ; cell offset in words
 
 ;-----flag bits------------
-F_DRAW      equ 0               ; render next vblank
+F_STEP      equ 0               ; step screen next vblank
 F_KEY       equ 1               ; key pressed
 F_DATA      equ 2               ; data on LPT
-F_MATCH     equ 3               ; match hit
-F_ERR       equ 15              ; error exit
+F_MATCH0    equ 3               ; match on pat0
+F_MATCH1    equ 4               ; match on pat1
+F_MATCH     equ 5               ; match on either
+F_MOD       equ 6
+F_ENV       equ 7               ; update envelopes
+F_PLAY      equ 8               ; play next interval
+F_ERR       equ 10              ; error exit
 
 ;-----sequencer defs-------
 E_ATT       equ 0
@@ -151,7 +157,7 @@ init:
     move.w  #$0111,_COLOR00     ; bg color (0) 
     move.w  #$0391,_COLOR01     ; fg color (1)
     move.w  #$0FFF,_COLOR02     ; fg color (2)
-    move.w  #$0913,_COLOR03     ; fg color (3)
+    move.w  #$0FFF,_COLOR03     ; fg color (3)
 
 ;-----init bitplanes-------
     IFND DEBUG
@@ -170,14 +176,44 @@ init:
 .initspr:
     clr.l   (a0)+ 
     dbra    d0,.initspr
-    ENDC
-    clr.w   d0
-    jsr     setpat
     lea     buf,a0
     move.w  #hsize-1,d6
 .buflp:
     move.b  #$80,(a0)+ 
     dbra    d6,.buflp
+    ENDC
+    IFD TEST
+    lea     state,a0            ; cell state address
+    move.l  #stsizel-1,d0       ; loop counter
+.initstate:
+    clr.l   (a0)+
+    dbra    d0,.initstate
+    lea     state,a0
+    move.b  #1,16(a0)
+    ENDC
+    clr.w   d0
+    jsr     setpat
+
+;-----init wavetables------
+    jsr     initwav
+    move.l  #_AUD0LC,a6         ; audio base
+    move.l  #wav0,d6
+    move.l  d6,0(a6)            ; set first channels
+    move.w  #TABSIZE,4(a6)
+    clr.w   8(a6)
+    add.l   #AUDOFFSET,a6
+    move.l  d6,0(a6)
+    move.w  #TABSIZE,4(a6)
+    clr.w   8(a6)
+    move.l  #wav1,d6          
+    add.l   #AUDOFFSET,a6       ; set second channels
+    move.l  d6,0(a6)
+    move.w  #TABSIZE,4(a6)
+    clr.w   8(a6)
+    add.l   #AUDOFFSET,a6
+    move.l  d6,0(a6)
+    move.w  #TABSIZE,4(a6)
+    clr.w   8(a6)
 
 ;-----setup copper list----
     move.l  #bgpl,d0            ; set up bg pointer
@@ -188,9 +224,6 @@ init:
     move.w  d0,copptr2l
     swap    d0
     move.w  d0,copptr2h
-    move.w  ctab,d1             ; fg color
-    move.w  d1,copptrc2
-    move.w  d1,copptrc3
     lea     coplist,a1          ; copper list position
     lea     ctab,a2             ; color table base
     move.w  #0,d0               ; color list index
@@ -248,18 +281,27 @@ init:
     move.w  #DMAF_ALLA,_DMACON  ; start DMA
     ENDC
 
-;-----test-------------------
-;   jsr     match
-;   jsr     findmatch
-;   move.w  d0,mx0
-;   move.w  d1,mx1
-
 ;-----frame loop start-------
 .mainloop:
+;   btst    #F_PLAY,flags
+;   beq     .notrig
+;   bclr    #F_PLAY,flags
+;   jsr     playlead
+.notrig:
+    btst    #F_KEY,flags
+    beq     .nokey
+    bclr    #F_KEY,flags
+    jsr     handlekb
+.nokey:
+    btst    #F_MOD,flags
+    beq     .nomod
+    bclr    #F_KEY,flags
+    jsr     modulate
+.nomod
     btst    #F_DATA,flags
     beq     .nodata
-;   jsr     match
-;   jsr     findmatch
+    bclr    #F_DATA,flags
+    jsr     match
 .nodata:
 .endmain:
     btst    #6,$bfe001
@@ -268,12 +310,14 @@ init:
 
 ;-----exit code------------
 .exit:
+    IFND DEBUG
     move.w  #$7FFF,_INTENA      ; turn off interrupts
     move.l  #CIAA,a5
     move.l  #CIAB,a6
     bclr.b  #0,CIACRB(a6)       ; stop timer
     move.b  #$7F,CIAICR(a6)     ; clear CIA-B interrupts
     move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
+    ENDIF
     movem.l (sp)+,d1-d2         ; pop saved copper,view
     movem.l (sp)+,d3-d6         ; pop CIA-A regs
     IFND DEBUG
@@ -336,7 +380,10 @@ init:
 .return:
 .xx:
     movem.l (sp)+,d1-d6/a0-a6
-    move.l  dbg,d0
+    move.w  mx0,d0
+    move.l  #state,d1
+    move.w  bpos,d2
+    move.w  pos,d3
     rts
 
 ;------interrupts----------
@@ -348,19 +395,38 @@ keyint:
     move.l  #CIAA,a0            ; CIA-A base
     btst    #3,CIAICR(a0)       ; test SP bit (???)
     beq     .exit
+    IFND TEST
     lea     buf,a2
     move.w  bpos,d6
     move.l  #CIAB,a1            ; CIAB base
     move.b  CIAPRB(a0),d0       ; load parallel data
     move.b  d0,(a2,d6.w)        ; store state
     move.w  #$8010,CIAICR(a0)   ; set FLAG bit (handshake)
-    addq    #1,d6               ; increment position
+    add.w   #1,d6               ; increment position
     and.w   #$1F,d6             ; mod 4*window size
-    move.w  d6,bpos             ; update position
     and.w   #$3,d6              ; test for full line
     cmp.b   #0,d6
-    bne.b   .exit
+    bne.b   .notline
     bset    #F_DATA,flags       ; set data bit
+.notline:
+    move.w  d6,bpos             ; update position
+    ENDC
+    IFD TEST
+    move.b  CIASDR(a0),d6       ; load serial data
+    or.b    #$01,CIACRB(a0)     ; start CIA-A TB (one shot)
+    or.b    #$40,CIACRA(a0)     ; set output mode (handshake)
+    not.b   d6                  ; decode key
+    lsr.b   #1,d6
+    bcs     .handshake
+    and.w   #$7F,d6             ; test key value
+    move.w  d6,key
+    bset    #F_KEY,flags 
+.handshake:
+    moveq   #2,d6               ; busy wait for timer underflow
+    and.b   CIAICR(a0),d6
+    beq     .handshake
+    and.b   #$BF,CIACRA(a0)     ; set input mode
+    ENDC
 .exit:
     move.w  #$4008,_INTREQ
     move.w  #$4008,_INTREQ
@@ -368,73 +434,87 @@ keyint:
     rte
 
 vblankint:
-    movem.l d1-d6/a0-a1,-(sp)
+    movem.l d1-d6/a0-a3,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #5,d0               ; VBLANK handler
     beq     .exit
-    btst    #F_DRAW,flags
-    beq     .nodraw
-    bclr    #F_DRAW,flags
+    btst    #F_STEP,flags
+    beq     .nostep
+    bclr    #F_STEP,flags
     move.w  coprpos,d5          ; get copper offset
     addmod  d5,width,bplsize    ; update start
     move.w  d5,coprpos
     lea     bgpl,a0
     lea     (a0,d5.w),a1        ; copper start
     move.l  a1,d6
-    move.w  d6,copptrl          ; update copper
+    move.w  d6,copptrl          ; update copper pointers
     swap    d6
     move.w  d6,copptrh
-    lea     bgpl0,a0            ; screen base for copy
+    lea     bgpl,a0             ; screen base for copy
     move.w  bplpos,d4           ; offset for copy
-    cmp.l   #0,d4               ; clear on reset
-    bne.b   .noclearlo
-    lea     bgpl,a1
-    jsr     clearpl
+;   cmp.l   #0,d4               ; clear on reset
+;   bne.b   .noclearlo
+;   lea     bgpl,a1
+;   jsr     clearpl
 .noclearlo:
     move.w  d4,d5
     add.w   #celloff,d5
-    lea     (a0,d5.w),a1        ; copy address
-    clr.w   d0
-    clr.w   d1
-    jsr     drawpat             ; draw pattern 0
-    lea     bgplhi0,a0          ; screen base for render
+    lea     (a0,d5.w),a2        ; copy address
+    IFD TEST
+    lea     cbuf,a0             ; source address
+    move.l  a2,a1               ; copy address
+    jsr     copystate           ; copy state
+    ENDC
+    lea     bgplhi,a0           ; screen base for render
     addmod  d4,width,bplsize    ; increment
     move.w  d4,bplpos
-    cmp.l   #0,d4               ; clear on reset
-    bne.b   .noclearhi
-    lea     bgplhi,a1
-    jsr     clearpl
+;   cmp.l   #0,d4               ; clear on reset
+;   bne.b   .noclearhi
+;   lea     bgplhi,a1
+;   jsr     clearpl
 .noclearhi:
     move.w  d4,d5 
     add.w   #celloff,d5
-    lea     (a0,d5.w),a1        ; render address
-    clr.w   d0
-    clr.w   d1
-    jsr     drawpat             ; draw pattern 0
-    move.w  cposfg,d5           ; get color table position
-    lsl.w   #1,d5
-    lea     ctabfg,a1
-    move.w  (a1,d5.w),d4        ; load color from table
-    move.w  d4,copptrc2         ; update fg colors
-    move.w  d4,copptrc3
-    cmp.w   #ctabsize-1,cposfg  ; increment table position
-    beq     .nodraw
-    add.w   #1,cposfg
-.nodraw:
-    btst    #F_MATCH,flags
-    beq     .exit
-    bclr    #F_MATCH,flags
+    lea     (a0,d5.w),a3        ; render address
+    IFD TEST
+    move.w  drawpos,d0          ; state position
+    jsr     drawstate           ; draw state
+    move.l  a3,a1               ; render address
+    lea     cbuf,a0             ; source address
+    jsr     copystate
+    ENDC
     lea     fgpl0,a1            ; get fg pointer
     jsr     clearrow            ; clear fg row
+.nostep:
+    btst    #F_MATCH,flags
+    beq     .nomatch1
+    bclr    #F_MATCH,flags
+    lea     fgpl0,a1            ; get fg pointer
     add.l   #celloff,a1
-    clr.w   d0
-    clr.w   d1
-    jsr     drawpat             ; draw pattern 0
-    clr.w   cposfg              ; reset table position
+    btst    #F_MATCH0,flags     ; test for match on 0
+    beq     .nomatch0
+    move.w  mx0,d0              ; load match index
+    move.w  #0,d1               ; select pattern 0
+    jsr     drawpat             ; draw pattern 0 (fg)
+;   move.l  a2,a1
+;   jsr     drawpat             ; draw pattern 0 (copy)
+;   move.l  a3,a1
+;   jsr     drawpat             ; draw pattern 0 (bg)
+.nomatch0:
+    btst    #F_MATCH1,flags     ; test for match on 1
+    beq     .nomatch1
+    move.w  mx1,d0              ; load match index
+    move.w  #1,d1               ; select pattern 1
+    jsr     drawpat             ; draw pattern 1 (fg)
+;   move.l  a2,a1
+;   jsr     drawpat             ; draw pattern 1 (copy)
+;   move.l  a3,a1 
+;   jsr     drawpat             ; draw pattern 1 (bg)
+.nomatch1: 
 .exit:
     move.w  #$4020,_INTREQ      ; clear INTREQ
     move.w  #$4020,_INTREQ      ; ... twice
-    movem.l (sp)+,d1-d6/a0-a1
+    movem.l (sp)+,d1-d6/a0-a3
     rte
 
 timerint:
@@ -445,20 +525,23 @@ timerint:
     move.l  #CIAB,a0            ; CIA-B base
     btst    #1,CIAICR(a0)
     beq     .exit
+    bset    #F_ENV,flags        ; request env update
     add.b   #1,count            ; increment count mod countmod
     cmp.b   #countmod,count     ; check for mod divider
     bne     .nomod
     clr.b   count
-    bset    #F_MATCH,flags
 .nomod:
     move.b  cpos,d0             ; increment mod position
     add.b   #1,d0
-    cmp.b   #(csize/2),d0       ; if halfway, request render
-    bne.b   .nodraw
-    bset    #F_DRAW,flags       ; set draw bit
-.nodraw
     and.b   #(csize-1),d0       ; mod and test 0
     move.b  d0,cpos
+    cmp.b   #0,d0
+    bne.b   .exit
+    bset    #F_STEP,flags
+    IFD TEST
+    move.w  pos,drawpos         ; set draw position
+    jsr     nextstate
+    ENDC
 .exit:
     move.w  #$6000,_INTREQ      ; clear INTREQ
     move.w  #$6000,_INTREQ      ; ... twice
@@ -473,14 +556,15 @@ timerint:
 
 ;------saves/system--------
     SECTION amd,DATA
-    EVEN
+    CNOP    0,4
 flags:
     dc.w    0                   ; state flags
 key:
     dc.w    0                   ; last keypress
 bpos:
     dc.w    0                   ; buffer position
-    EVEN
+pos:
+    dc.w    0
 savelvl2:
     dc.l    0                   ; saved lvl2 handler
 savelvl3:
@@ -494,7 +578,7 @@ gfxname:
   
 ;-----locals---------------
     SECTION amd,DATA
-    EVEN
+    CNOP    0,4
 bplpos:
     dc.w    0                   ; bitplane offset for render
 coprpos:
@@ -528,7 +612,7 @@ spr1:
     ds.l    sprsizel            ; display pattern 1
 
     SECTION amd,DATA
-    EVEN
+    CNOP    0,4
 pat0:
     dc.l    0                   ; pattern address 0
 pat1:
@@ -548,8 +632,79 @@ mx1:
     dc.w    0
 dbg:
     dc.l    0
+dbg2:
+    dc.l    0
+dbgm:
+    dc.w    0
+dbgb:
+    dc.w    0
+dbgp:
+    dc.w    0
+dbgf:
+    dc.l    0,0,0,0,0,0,0,0
 ptmp:
     dc.b    0
+
+;-----cell state-----------
+    IFD TEST
+    SECTION amd,DATA
+    CNOP    0,4
+rule:
+    dc.w    0
+    CNOP    0,4
+state:
+    ds.b    stsize
+    ENDC 
+
+;-----leads data-----------
+    SECTION amd,DATA
+    CNOP    0,4
+scale:
+    ds.b    sclen*2           ; scale lists
+    CNOP    0,4
+ldstate:
+ldnote:
+    ds.b    2                 ; current notes
+ldvoice:
+    ds.b    2                 ; current voice
+ldtrig:
+    ds.b    2                 ; triggers
+ldoct:
+    ds.b    2                 ; octaves
+ldvol:
+    ds.b    2                 ; max volumes
+ldatt:
+    ds.b    2                 ; attack rates
+lddec:
+    ds.b    2                 ; decay rates
+ldsus:
+    ds.b    2                 ; sustain level
+ldrel:
+    ds.b    2                 ; release times
+ldmod:
+    ds.b    2                 ; mod position
+ldparms:
+ldenv:
+    ds.b    2                 ; envelope states (voice 0)
+    ds.b    2                 ; envelope states (voice 1)
+ldlvl:
+    ds.b    2                 ; current levels (voice 0)
+    ds.b    2                 ; current levels (voice 1)
+ldsize      equ  (*-ldstate)
+
+;-----ldstate addressing---
+LDN         equ   (ldnote-ldstate)
+LDC         equ   (ldvoice-ldstate)
+LDT         equ   (ldtrig-ldstate)
+LDO         equ   (ldoct-ldstate)
+LDV         equ   (ldvol-ldstate)
+LDA         equ   (ldatt-ldstate)
+LDD         equ   (lddec-ldstate)
+LDS         equ   (ldsus-ldstate)
+LDR         equ   (ldrel-ldstate)
+LDM         equ   (ldmod-ldstate)
+LDE         equ   (ldenv-ldparms)
+LDL         equ   (ldlvl-ldparms)
 
 ;-----copper lists---------
     SECTION amdc,DATA_C
@@ -565,13 +720,7 @@ copptrh:
 copptr2l:  
     dc.w    0
     dc.w    BPL2PTH_
-copptr2h:
-    dc.w    0
-    dc.w    COLOR02_
-copptrc2:
-    dc.w    0
-    dc.w    COLOR03_
-copptrc3:
+copptr2h:  
     dc.w    0
 coplist:
     dcb.l   64, CL_END
@@ -579,18 +728,22 @@ coplist:
 ;-----bitplanes------------
     SECTION ambss,BSS_C
     CNOP    0,4
-bgpl0:
-    ds.b    width*pwidth
 bgpl:
     ds.b    bplsize-width*pwidth
 bgplhi0:
     ds.b    width*pwidth
 bgplhi:
     ds.b    bplsize
+    CNOP    0,4
 fgpl:
-    ds.b    bplsize-width*pwidth
+    ds.b    bplsize-width*(pwidth-2)
 fgpl0:
-    ds.b    width*pwidth
+    ds.b    width*(pwidth+2)
+    IFD TEST
+    CNOP    0,4
+cbuf:
+    ds.b    stwidth*csize     ; state display buffer
+    ENDC
 
 ;-----color tables---------
     SECTION amd,DATA
@@ -644,7 +797,7 @@ loadpat:
     move.b  (a6,d1.w),d4        ; load sprite line
     cmp.b   #0,(a3,d0.w)        ; test invert bit
     beq     .posa
-    neg.b   d4                  ; negate bits
+    not.b   d4                  ; negate bits
 .posa:
     move.b  (a5,d3.w),d5
     and.b   (a5,d3.w),d4        ; and with mask
@@ -680,7 +833,7 @@ loadpat:
     move.b  (a6,d1.w),d4        ; load sprite line
     cmp.b   #0,(a3,d0.w)        ; test invert bit
     beq     .posb
-    neg.b   d4                  ; negate bits
+    not.b   d4                  ; negate bits
 .posb:
     move.b  (a5,d3.w),d5
     and.b   (a5,d3.w),d4        ; and with mask
@@ -705,6 +858,52 @@ loadpat:
     add.l   #sprwidth*(csize-1),a2  ; next cell line
     dbra    d6,.loadb
     rts
+
+;-----loadscales()---------
+; update the scales/leads for the current mode.
+    CNOP    0,4
+loadscales:
+    lea     scales,a6         ; scale base
+    lea     scale,a5          ; scale data
+    lea     ldstate,a4        ; param base
+    clr.l   d5
+    clr.w   d4
+    clr.w   d3
+    move.b  mode,d5           ; get mode
+    lsl.w   #seqlenlog,d5     ; get scale index
+    add.l   d5,a6             ; scale base    
+    move.w  #1,d6             ; loop counter
+.loop:
+    move.l  a6,a3             ; copy
+    move.b  (a3)+,d3          ; get scale length
+    move.w  #8,d4
+    sub.w   d3,d4             ; get offset to centre
+    move.w  #sclen-1,d2       ; loop counter
+.copy
+    move.b  (a3,d4),(a5)+     ; copy scale note
+    add.w   #1,d4             ; increment mod length
+    cmp.w   d3,d4
+    blt     .nowrap
+    clr.w   d4
+.nowrap:
+    dbra    d2,.copy
+    dbra    d6,.loop
+    rts
+
+;-----modulate()---------
+; modulate current key
+; TODO: rewrite to take mode index from PPT
+    CNOP    0,4
+modulate:
+    move.b  mode,d6           ; current mode
+    add.b   #1,d6
+    cmp.b   #seqcnt,d6
+    blt     .nowrap
+    clr.b   d6
+.nowrap
+    move.b  d6,mode
+    jsr     loadscales
+    rts
     
 ;-----setpat(d0)-----------
 ; adjust the current pattern
@@ -722,6 +921,14 @@ setpat:
     blt     .inrange
     sub.w   #numpat,d1
 .inrange:
+    IFD TEST
+    move.w  d1,d2
+    lsl.w   #rulesl,d2
+    lea     rules,a1
+    clr.w   d3
+    move.b  (a1,d2.w),d3
+    move.w  d3,rule
+    ENDC
     move.w  d1,pattern
     jsr     loadpat
     rts 
@@ -744,7 +951,7 @@ matchdown:
     lsl.w   #psizelog,d0        ; pattern/mask offset (0,1)
     add.w   #1,d0               ; next row
     add.w   #4,d5               ; next window row
-    and.w   #$1F,d5             ; mod (8 rows * 4 bytes/row)
+    and.w   #$1C,d5             ; mod (8 rows * 4 bytes/row)
     neg.w   d6                  ; counter in [-31,0]
     add.w   #31,d6              ; counter in [0,31]
     moveq   #pwidth-2,d4        ; loop counter
@@ -756,16 +963,19 @@ matchdown:
     bne.b   .exit
     add.w   #1,d0               ; next row
     add.w   #4,d5               ; next window row
-    and.w   #$1F,d5             ; mod (8 rows * 4 bytes/row)
+    and.w   #$1C,d5             ; mod (8 rows * 4 bytes/row)
     dbra    d4,.loop 
 .found:
     ; here d6 is is the number of rotate rights done
     ; the match position is (24 - d6) % 32
     neg.w   d6
-    add.w   #56,d6
+    add.w   #24,d6
     and.w   #$1F,d6
     lea     mbits0,a2           ; get match base
     lsl.w   #2,d3               ; match offset (0,1)
+    move.l  #1,d0
+;   move.l  #$80000000,d0
+;   lsr.l   d6,d0
     move.l  #1,d0
     lsl.l   d6,d0
     or.l    d0,(a2,d3.w)        ; set match bit
@@ -808,79 +1018,116 @@ match:
 .nomatch1:
     ror.l   #1,d2               ; next position
     dbra    d6,.loop
+    jsr     findmatch
     rts 
 
 ;-----findmatch()------------
 ; checks mbits0, mbits1 for a pattern
-; match. Sets d0,d1 to the match index + 1 or
+; match. Sets mx0,mx1 to the match index + 1 or
 ; 0 if no match was found.
     CNOP    0,4
 findmatch:
-    move.b  #15,d5              ; down counter
-    move.b  #16,d6              ; up counter 
-    clr.l   d0                  ; initial result
-    clr.l   d1
+    move.w  #15,d5              ; down counter
+    move.w  #16,d6              ; up counter 
+    lea     ldtrig,a6           ; trigger base
+    bclr    #F_MATCH0,flags     ; clear bits
+    bclr    #F_MATCH1,flags
 .loop0:
-    btst    d5,mbits0
+    moveq   #1,d0
+    lsl.l   d5,d0
+    and.l   mbits0,d0
+    cmp.l   #0,d0
     bne     .down0
-    btst    d6,mbits0
+    moveq   #1,d0
+    lsl.l   d6,d0
+    and.l   mbits0,d0
+    cmp.l   #0,d0
     bne     .up0
-    add.b   #1,d6
+    add.w   #1,d6
     dbra    d5,.loop0
     bra     .next
 .down0:
-    add.b   #1,d5
-    move.b  d5,d0 
+    move.w  d5,mx0
+    bset    #F_MATCH0,flags
+    bset    #F_MATCH,flags
+    bset    #F_PLAY,flags
+    move.b  #1,0(a6)
     bra     .next
 .up0:
-    add.b   #1,d6
-    move.b  d6,d0
+    move.w  d6,mx0
+    bset    #F_MATCH0,flags
+    bset    #F_MATCH,flags
+    bset    #F_PLAY,flags
+    move.b  #1,0(a6)
 .next:
-    move.b  #15,d5              ; down counter
-    move.b  #16,d6              ; up counter 
+    move.w  #15,d5              ; down counter
+    move.w  #16,d6              ; up counter 
 .loop1:
-    btst    d5,mbits1
+    moveq   #1,d0
+    lsl.l   d5,d0
+    and.l   mbits1,d0
+    cmp.l   #0,d0
     bne     .down1
-    btst    d6,mbits1
+    moveq   #1,d0
+    lsl.l   d5,d0
+    and.l   mbits1,d0
+    cmp.l   #0,d0
     bne     .up1
-    add.b   #1,d6
+    add.w   #1,d6
     dbra    d5,.loop1
     bra     .done
 .down1:
-    add.b   #1,d5
-    move.b  d5,d1 
+    move.w  d5,mx1
+    bset    #F_MATCH1,flags
+    bset    #F_MATCH,flags
+    bset    #F_PLAY,flags
+    move.b  #1,1(a6)
     bra     .done
 .up1:
-    add.b   #1,d6
-    move.b  d6,d1
+    move.w  d6,mx1
+    bset    #F_MATCH1,flags
+    bset    #F_MATCH,flags
+    bset    #F_PLAY,flags
+    move.b  #1,1(a6)
 .done:
     rts
 
 ;-----drawpat(d0,d1,a1)------
 ; Render the pattern indicated by d1 at 
 ; to address a1 at offset d0.
-; TODO: can use the blitter LF to invert and even mask?
+; preserves d0,d1
     CNOP    0,4
 drawpat:
-    waitblt
+    move.w  d0,d5
+    move.w  d1,d6
     lea     (a1,d0.w),a2      ; dest pointer
-    move.l  a2,_BLTDPT        ; D address
-    move.l  a2,_BLTCPT        ; C address
+    move.w  #0,d3             ; shift value
+    and.w   #1,d0             ; test for alignment
+    cmp.w   #0,d0
+    beq     .aligned
+    move.w  #$8000,d3         ; align value in 12-15
+.aligned:
     lea     spr0,a0           ; pattern base 
     cmp.w   #0,d1
     beq     .idx0
     lea     spr1,a0
 .idx0:
+    waitblt
+    move.l  a2,_BLTDPT        ; D address
+    move.l  a2,_BLTCPT        ; C address
     move.l  a0,_BLTAPT        ; source pointer
     clr.w   _BLTAMOD          ; set A modulo
     move.w  #coff*2,_BLTDMOD  ; set D modulo
     move.w  #coff*2,_BLTCMOD  ; set C modulo
-    move.w  #$0BFA,_BLTCON0   ; enable A,C,D, LF A + C
+    or.w    #$0BFA,d3         ; set control bits
+    move.w  d3,_BLTCON0       ; enable A,C,D, LF A + C (9)
     move.w  #sprwidthw,d0     ; word count
     move.w  #csize*pwidth,d1  ; height
     lsl.w   #6,d1             ; in bit pos 6
     or.w    d1,d0             ; form blit size
     move.w  d0,_BLTSIZE       ; start blit
+    move.w  d6,d1             ; restore regs
+    move.w  d5,d0
     rts 
 
 ;-----clearrow(a1)----------
@@ -912,6 +1159,260 @@ clearpl:
     lsl.w   #6,d1             ; .. in pos 6
     or.w    d1,d0             ; form blit size
     move.w  d0,_BLTSIZE       ; start blit
+    rts
+  
+;-----handlekb()------------
+; Process the key buffer.
+    CNOP    0,4
+handlekb:
+    move.w  key,d6
+    cmp.b   #$30,d6 
+    bge.b   .row3
+    bra     .done
+.row3:
+    and.b   #$0F,d6
+    cmp.b   #8,d6
+    bge     .setpat
+    and.w   #$03,d6
+    cmp.b   #0,d6
+    beq     .done
+    cmp.b   #3,d6
+    bgt     .done
+    cmp.b   #3,d6
+    bne     .setstate           ; 1,2 - set state
+    bset    #F_MOD,flags        ; 3 - modulate
+    bra     .done 
+.setstate: 
+    IFD TEST
+    lea     state,a1
+    move.w  pos,d4              ; get current position
+    lsl.w   #stwidthlog,d4      ; ..
+    move.w  #(ncells/4)-1,d5    ; loop counter
+.clear:
+    clr.l   (a1,d4.w)
+    addq    #4,d4
+    dbra    d5,.clear
+    cmp.b   #1,d6
+    beq.b   .reset1
+.resetrand:
+    move.w  pos,d4              ; get current position
+    lsl.w   #stwidthlog,d4      ; ..
+    move.w  #ncells-1,d5        ; loop counter
+.randloop:
+    move.b  _VHPOSR,d6
+    and.w   #1,d6
+    move.b  d6,(a1,d4.w)
+    addq    #1,d4
+    btst    #1,_VHPOSR
+    dbra    d5,.randloop
+    bra     .done
+.reset1:
+    move.w  pos,d4              ; get current position
+    lsl.w   #stwidthlog,d4      ; ..
+    add.w   #(ncells/2),d4
+    move.b  #1,(a1,d4.w)
+    bra     .done
+    ENDC
+.setpat:
+    move.w  #1,d0
+    cmp.b   #9,d6
+    bge     .inc
+    neg.w   d0
+.inc
+    jsr     setpat
+    bra     .done
+.done:
+    bclr    #F_KEY,flags
+    rts
+
+    IFD TEST
+;-----nextstate()----------
+; Compute next cell state.
+; uses a0-a2,d0-d6
+    CNOP    0,4
+nextstate:
+    lea     state,a0          ; state address
+    move.l  a0,a1
+    move.w  rule,d3           ; rule
+    clr.l   d0
+    move.w  pos,d0            ; current position 
+    move.l  d0,d1
+    incmod  d1,nstates
+    move.w  d1,pos            ; save new position
+    lsl.w   #stwidthlog,d0
+    lsl.w   #stwidthlog,d1
+    add.l   d0,a0             ; current state
+    add.l   d1,a1             ; next state
+    clr     d4                ; shift buffer
+    move.b  stlast(a0),d0     ; s-1
+    lsl.b   #2,d0
+    or.b    d0,d4             ; add to buffer
+    move.b  (a0)+,d0          ; s
+    move.b  d0,d6             ; save first element in d6
+    lsl.b   #1,d0
+    or.b    d0,d4             ; add to buffer
+    move.b  d4,d2             ; previous buffer in d2
+    move.w  #ncells-1,d0      ; loop counter
+.stloop:
+    move.b  (a0)+,d1          ; next
+    or.b    d1,d4 
+    move    d3,d1             ; check rule bit
+    lsr.b   d4,d1
+    and.b   #1,d1
+    move.b  d1,(a1)+          ; store new state
+    move.b  d4,d2             ; previous buffer in d2
+    lsl.b   #1,d4             ; advance bits
+    and.b   #7,d4
+    dbra    d0,.stloop
+    or.b    d6,d4             ; last
+    move    d3,d1             ; check rule bit
+    lsr.b   d4,d1
+    and.b   #1,d1
+    move.b  d1,(a1)           ; store new state
+    move.w  pos,d0
+    jsr     pack
+    rts
+
+;-----pack()---------------
+; pack state at d0 into packed as dword.
+; uses d0-d2,d6,a6
+    CNOP    0,4
+pack:
+    lea     state,a6          ; compute state address
+    lsl.w   #stwidthlog,d0    
+    move.w  #ncells-1,d6      ; loop counter
+    move.l  #$80000000,d1     ; bit mask
+    move.w  #0,d2             ; bit buffer
+.loop:
+    cmp.b   #0,(a6,d0.w)      ; test byte
+    beq.b   .next
+    or.l    d1,d2             ; set bit
+.next:
+    lsr.l   #1,d1             ; advance mask
+    add.w   #1,d0             ; advance position
+    dbra    d6,.loop
+    lea     buf,a6
+    move.w  bpos,d0           ; write position
+    move.l  d2,(a6,d0.w)
+    add.w   #4,d0             ; advance
+    and.w   #$1F,d0           ; mod 4*window size
+    move.w  d0,bpos
+    bset    #F_DATA,flags     ; set data flag
+    rts
+
+;-----drawstate(d0)--------
+; Render the cell state at position in d0
+; to render buffer cbuf.
+; uses a0-a1,d0-d3
+    CNOP    0,4
+drawstate:
+    waitblt
+    lea     state,a0          ; compute state addr
+    lsl.w   #stwidthlog,d0
+    add.l   d0,a0
+    lea     stwidth+cbuf,a1   ; cell ptr
+    move.w  #ncells-1,d0      ; loop counter
+    move.l  #$7E000000,d1     ; bit pattern
+    clr.l   d2                ; current word
+.drawloop:
+    cmp.b   #0,(a0)+          ; test current cell
+    beq     .off 
+    or.l    d1,d2             ; set bit 
+.off: 
+    lsr.l   #csize,d1         ; advance bit
+    bne     .nxt
+    move.l  #$7E000000,d1     ; reset pattern
+    move.l  d2,(a1)+          ; store word
+    clr.l   d2                ; clear current word
+.nxt:
+    dbra    d0,.drawloop
+    move.w  #csize-3,d1       ; outer loop counter
+.copyout:
+    lea     stwidth+cbuf,a0
+    move.w  #stwidthl-1,d0    ; inner loop counter
+.copyloop:
+    move.l  (a0)+,d2          ; copy by dwords
+    move.l  d2,(a1)+
+    dbra    d0,.copyloop
+    dbra    d1,.copyout
+    rts 
+
+;-----copystate()-------
+; Copy the contents of the rendered state at a0
+; into the display at address a1
+    CNOP    0,4
+copystate:
+    waitblt
+    move.l  a1,_BLTDPT        ; set D pointer
+    move.l  a0,_BLTAPT        ; set A pointer
+    clr.w   _BLTAMOD          ; set A modulo
+    move.w  #celloff*2,_BLTDMOD  ; set D modulo 
+    move.w  #$09F0,_BLTCON0   ; enable A,D, LF A
+    move.l  #stwidthw,d0      ; word count
+    move.w  #csize,d1         ; height
+    lsl.w   #6,d1             ; move height into position
+    or.w    d1,d0             
+    move.w  d0,_BLTSIZE       ; start the blit
+    rts
+    ENDC
+
+;-----wavcopy(a0,a1)--------
+; copy wave data at a1 into a0.
+    CNOP    0,4
+wavcopy:
+    waitblt
+    move.l  a0,_BLTDPT        ; D address
+    move.l  a1,_BLTAPT        ; C address
+    clr.w   _BLTAMOD          ; set A modulo
+    clr.w   _BLTDMOD
+    move.w  #$09F0,_BLTCON0   ; enable A,D, LF A 
+    move.w  #TABSIZE,d0       ; word count
+    or.w    #$40,d0           ; set height = 1
+    move.w  d0,_BLTSIZE       ; start blit
+    rts 
+    CNOP    0,4
+initwav:
+    lea     saw128,a1
+    lea     wav0,a0
+    jsr     wavcopy
+    lea     sin128,a1
+    lea     wav1,a0
+    jsr     wavcopy
+    rts 
+
+;-----playlead()-------------
+; trigger lead note(s).
+    CNOP    0,4
+playlead:
+    move.l  #_AUD0LC,a6       ; audio base
+    lea     ldstate,a5        ; param base
+    lea     scale,a4          ; scale data
+    lea     ldenv,a3
+    lea     ldlvl,a2
+    clr.w   d5                ; clear word regs
+    clr.w   d3
+    move.w  #1,d6             ; loop counter
+.loop:
+    cmp.b   #0,LDT(a5)        ; check trigger
+    beq     .next             ; skip if none
+    move.b  LDN(a5),d5        ; scale note
+    lsl.w   #1,d5             ; to word offset
+    move.w  (a4,d5),d4        ; period value
+    move.b  LDC(a5),d3        ; next voice
+    bset    #E_DEC,(a3,d3)    ; set env state
+    move.b  LDV(a5),(a2,d3)   ; set volume
+    move.b  LDV(a5),d3       
+    move.w  d3,8(a4)          ; level
+    move.w  d4,6(a4)          ; period
+    bchg    #0,LDV(a5)        ; toggle voice
+    clr.b   LDT(a5)           ; clear trigger
+.next:
+    add.l   #AUDOFFSET*2,a6   ; next channel set
+    add.l   #1,a5             ; next voice
+    add.l   #2,a3             ; ""
+    add.l   #2,a2             ; ""
+    add.l   #sclen,a4         ; next scale
+    dbra    d6,.loop
     rts
 
 ;------------------------------------------------------------------------------

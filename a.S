@@ -250,18 +250,14 @@ init:
     move.b  #(kbhs&$FF),CIATBLO(a5)   ; set CIA-A timer B period
     move.b  #(kbhs>>8),CIATBHI(a5)    ; .. for kb handshake
     move.l  #keyint,$68.w       ; install lvl2 handler (cia-a)
-    IFND NOGRAPH
     move.l  #vblankint,$6C.w    ; install lvl3 handler
-    ENDC
     move.l  #timerint,$78.w     ; install lvl6 handler (cia-b)
     move.b  #$88,CIAICR(a5)     ; enable CIA-A SP interrupt (keyboard)
     move.b  #$82,CIAICR(a6)     ; enable CIA-B TB interrupt
     move.w  #$E028,_INTENA      ; enable lvl2/3/6
     waitr   a1,d0,d1,d2
     bset.b  #0,CIACRB(a6)       ; start CIA-B TB
-    IFND NOGRAPH
     move.w  _COPJMP1,d0         ; start copper
-    ENDC
     move.w  #$8000,_ADKCON      ; clear mod bits
     move.w  #$7FFF,_DMACON      
     move.w  #DMAF_ALLA,_DMACON  ; start DMA
@@ -647,12 +643,8 @@ coplist:
 ;-----bitplanes------------
     SECTION ambss,BSS_C
     CNOP    0,4
-bgpl0:
-    ds.b    width
 bgpl:
-    ds.b    bplsize-width
-bgplhi0:
-    ds.b    width
+    ds.b    bplsize
 bgplhi:
     ds.b    bplsize
     CNOP    0,4
@@ -937,7 +929,7 @@ playseq:
     move.b  d5,d4             ; convert to word offset
     lsl.b   #1,d4
     move.w  (a5,d4),d3        ; period
-    addq    #1,d5             ; increment position
+    add.b   #1,d5             ; increment position
     cmp.b   SQLN(a3),d5       ; check against length
     blt.b   .nowrap
     clr.b   d5
@@ -945,6 +937,7 @@ playseq:
     move.b  d5,SQP(a3)        ; new position
     cmp.b   #0,(a6,d4)        ; check for 0 trigger
     beq.b   .notrig
+    clr.w   d2
     move.b  SQV(a3),d2
     move.b  d2,SQL(a3)        ; level
     move.w  #TABSIZE,4(a4)    ; length
@@ -953,7 +946,7 @@ playseq:
     move.w  d3,6(a4)          ; period
 .notrig:
     add.l   #AUDOFFSET,a4     ; next channel
-    add.w   #1,a3             ; ""
+    add.l   #1,a3             ; ""
     add.l   #seqlen,a5        ; ""
     dbra    d6,.loop
     rts
@@ -1103,14 +1096,14 @@ pack:
     lea     state,a6          ; compute state address
     lsl.w   #stwidthlog,d0    
     move.w  #ncells-1,d6      ; loop counter
-    move.l  #1,d1             ; bit mask
+    move.l  #$80000000,d1     ; bit mask
     move.w  #0,d2             ; bit buffer
 .loop:
     cmp.b   #0,(a6,d0.w)      ; test byte
     beq.b   .next
     or.l    d1,d2             ; set bit
 .next:
-    lsl.l   #1,d1             ; advance mask
+    lsr.l   #1,d1             ; advance mask
     add.w   #1,d0             ; advance position
     dbra    d6,.loop
     move.l  d2,packed         ; store bits

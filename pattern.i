@@ -4,14 +4,12 @@ numpat      equ   12
     SECTION amd,DATA
     CNOP    0,4
 pattern:
-    dc.w    1         ; current pattern
+    dc.w    0         ; current pattern
     CNOP    0,4
 rulesl      equ   1   ; shift for rule index
-rulen       equ   0   ; rule offset
-rulep       equ   1   ; parity offset
 rules:
     dc.b    109,0 
-    dc.b    32,0
+    dc.b    30,0
     dc.b    150,0
     dc.b    110,0
     dc.b    161,0
@@ -30,122 +28,122 @@ patsizelog  equ   2   ; 8x8 patterns
 patsize     equ   (1<<patsizelog)
 patterns:
 p109:
-    dc.b    %00000000
-    dc.b    %01010000
-    dc.b    %01110000
-    dc.b    %00000000
+    dc.b    %11111000
+    dc.b    %10001000
+    dc.b    %10101000
+    dc.b    %11111000
     dc.b    0,0,0,0      
-    dc.b    %00010000
-    dc.b    %01000100
-    dc.b    %01111100
-    dc.b    %00000000
+    dc.b    %11111110
+    dc.b    %10111010
+    dc.b    %10000010
+    dc.b    %11101110
     dc.b    0,0,0,0
 p32:
-    dc.b    %11111111
-    dc.b    %11011111
-    dc.b    %10101111
-    dc.b    %11111111
+    dc.b    %00000000
+    dc.b    %00100000
+    dc.b    %01010000
+    dc.b    %00000000
     dc.b    0,0,0,0
-    dc.b    %11011111
-    dc.b    %10101111
-    dc.b    %01010111
-    dc.b    %11111111
+    dc.b    %00100000
+    dc.b    %01010000
+    dc.b    %10101000
+    dc.b    %00000000
     dc.b    0,0,0,0
 p150:
+    dc.b    %00000000
+    dc.b    %00111000
+    dc.b    %01111100
+    dc.b    %11111110
+    dc.b    0,0,0,0
     dc.b    %11111111
     dc.b    %11000111
     dc.b    %10000011
     dc.b    %00000001
     dc.b    0,0,0,0
-    dc.b    %00000000
-    dc.b    %00111000
-    dc.b    %01111100
-    dc.b    %11111110
-    dc.b    0,0,0,0
 p110:
-    dc.b    %01000000
-    dc.b    %01100000
-    dc.b    %01110000
-    dc.b    %00000000
+    dc.b    %10111111
+    dc.b    %10011111
+    dc.b    %10001111
+    dc.b    %11111111
     dc.b    0,0,0,0
-    dc.b    %01000000
-    dc.b    %00100000
-    dc.b    %00010000
-    dc.b    %00001000
-    dc.b    %00000000
+    dc.b    %10111111
+    dc.b    %11011111
+    dc.b    %11101111
+    dc.b    %11110111
+    dc.b    %11111111
     dc.b    0,0,0
 p161:
-    dc.b    %01001000
-    dc.b    %10000100
-    dc.b    %00000000
-    dc.b    %11111100
+    dc.b    %10110111
+    dc.b    %01111011
+    dc.b    %11111111
+    dc.b    %00000011
     dc.b    0,0,0,0
-    dc.b    %00010100
-    dc.b    %00100010
-    dc.b    %01000001
-    dc.b    %00000000
-    dc.b    %00000000
+    dc.b    %11101011
+    dc.b    %11011101
+    dc.b    %10111110
+    dc.b    %11111111
+    dc.b    %11111111
     dc.b    0,0,0
 p165:
-    dc.b    %10111111
-    dc.b    %00011111
-    dc.b    %01011111
+    dc.b    %01000000
+    dc.b    %11100000
+    dc.b    %10100000
     dc.b    0,0,0,0,0
-    dc.b    %01010111
-    dc.b    %10001111
-    dc.b    %00000111
-    dc.b    %01010111
+    dc.b    %10101000
+    dc.b    %01110000
+    dc.b    %11111000
+    dc.b    %10101000
     dc.b    0,0,0,0
 p15:
-    dc.b    %11000000
-    dc.b    %01000000
-    dc.b    %00100000
+    dc.b    %00111111
+    dc.b    %10111111
+    dc.b    %11011111
     dc.b    0,0,0,0,0
-    dc.b    %00011111
-    dc.b    %11000111
+    dc.b    %11100000
+    dc.b    %00111000
     dc.b    0,0,0,0,0,0
 p9:
-    dc.b    %01111111
-    dc.b    %00011111
-    dc.b    %11111111
+    dc.b    %10000000
+    dc.b    %11100000
+    dc.b    %00000000
     dc.b    0,0,0,0,0
-    dc.b    %00011111
-    dc.b    %01011111
-    dc.b    %00011111
+    dc.b    %11100000
+    dc.b    %10100000
+    dc.b    %11100000
     dc.b    0,0,0,0,0
 p120:
-    dc.b    %01100000
-    dc.b    %11000000
+    dc.b    %10011111
+    dc.b    %00111111
     dc.b    0,0,0,0,0,0
-    dc.b    %00100000
-    dc.b    %01100000
-    dc.b    %11100000
-    dc.b    %00000000
+    dc.b    %11011111
+    dc.b    %10011111
+    dc.b    %00011111
+    dc.b    %11111111
 p18:
-    dc.b    %00010000
-    dc.b    %00111000
-    dc.b    %01111100
-    dc.b    %11111110
-    dc.b    %01010100
+    dc.b    %11101111
+    dc.b    %11000111
+    dc.b    %10000011
+    dc.b    %00000001
+    dc.b    %10101011
     dc.b    0,0,0
-    dc.b    %01110000
-    dc.b    %00100000
+    dc.b    %10001111
+    dc.b    %11011111
     dc.b    0,0,0,0,0,0
 p125:
-    dc.b    %00000100
-    dc.b    %01111100
+    dc.b    %11111011
+    dc.b    %10000011
     dc.b    0,0,0,0,0,0
-    dc.b    %00100000
-    dc.b    %01100000
+    dc.b    %11011111
+    dc.b    %10011111
     dc.b    0,0,0,0,0,0
 p135:
-    dc.b    %10100000
-    dc.b    %11000000
-    dc.b    %11100000
+    dc.b    %01011111
+    dc.b    %00111111
+    dc.b    %00011111
     dc.b    0,0,0,0,0
-    dc.b    %01000000
-    dc.b    %01100000
-    dc.b    %00000000
+    dc.b    %10111111
+    dc.b    %10011111
+    dc.b    %11111111
     dc.b    0,0,0,0,0
  
 ;-----masks-------------------
@@ -158,13 +156,13 @@ mask45      equ   (*-masks)
     dc.b    %11111000
     dc.b    %11111000
     dc.b    0,0,0,0
-mask47    equ   (*-masks)
+mask47      equ   (*-masks)
     dc.b    %11111110
     dc.b    %11111110
     dc.b    %11111110
     dc.b    %11111110
     dc.b    0,0,0,0
-mask150   equ   (*-masks)
+mask150     equ   (*-masks)
     dc.b    %00000000
     dc.b    %01111110
     dc.b    %11111110
@@ -249,8 +247,6 @@ mask131b    equ   (*-masks)
     SECTION amdc,DATA_C
     CNOP    0,4
 mmapsl      equ   2     ; shift for map index
-map0        equ   0     ; offset of first
-map1        equ   2     ; offset of second
 mmap:
 m109:
     dc.w    mask45 
@@ -288,31 +284,29 @@ m131:
 
 ;-----invert bits---------
 invsl       equ   1     ; shift for inv index
-bit0        equ   0     ; offset of first
-bit1        equ   1     ; offset of second
 invert:
 b109:
-    dc.b    0,0
+    dc.b    1,1
 b32:
-    dc.b    1,1
+    dc.b    0,0
 b150:
-    dc.b    1,0
-b110:
-    dc.b    0,0
-b161:
-    dc.b    1,1
-b165: 
-    dc.b    1,1
-b15:
     dc.b    0,1
+b110:
+    dc.b    1,1
+b161:
+    dc.b    0,0
+b165: 
+    dc.b    0,0
+b15:
+    dc.b    1,0
 b9:
-    dc.b    1,1
+    dc.b    0,0
 b120:
-    dc.b    0,0
-b18:
-    dc.b    0,0
-b125:
-    dc.b    0,0
-b131:
     dc.b    1,1
+b18:
+    dc.b    1,1
+b125:
+    dc.b    1,1
+b135:
+    dc.b    0,0
 
