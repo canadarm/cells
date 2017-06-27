@@ -1,8 +1,11 @@
 seqlenlog   equ 3
 seqlen      equ (1<<seqlenlog)    ; seq max length in bytes 
 seqcnt      equ 7                 ; number of modes
+ldlenlog    equ 4
+ldlen       equ (1<<ldlenlog)
 sclenlog    equ 5
 sclen       equ (1<<sclenlog)
+sclen2      equ (1<<(sclenlog-1))
 modelenlog  equ (seqlenlog+2)     ; mode block size (log)
 modelen     equ (1<<modelenlog)
 
@@ -10,9 +13,9 @@ modelen     equ (1<<modelenlog)
     SECTION amd,DATA
     CNOP    0,4
 mode:
-    dc.b    1
+    dc.b    0
 root:       
-    dc.b    4
+    dc.b    0
     CNOP    0,4
 modes:
 modep:
@@ -54,24 +57,24 @@ mode7:
 ;-----lead scales-------------
 scales:
 scalep:
-    dc.b    6, 0,2,4,5,7,9,0
+    dc.b    12, 0,2,4,5,7,9,12,14,16,17,19,21,0,0,0
 scale1:
-    dc.b    6, 0,2,4,7,9,10,0
+    dc.b    12, 0,2,4,7,9,10,12,14,16,19,21,22,0,0,0
 scale3:
-    dc.b    6, 0,3,5,7,8,10,0
+    dc.b    12, 0,3,5,7,8,10,12,15,17,19,20,22,0,0,0
 scale4:
-    dc.b    6, 0,2,4,7,9,11,0
+    dc.b    12, 0,2,4,7,9,11,12,14,16,19,21,23,0,0,0
 scale5:
-    dc.b    5, 0,2,5,7,10,0,0
+    dc.b    10, 0,2,5,7,10,12,14,17,19,22,0,0,0,0,0
 scale6:
-    dc.b    7, 0,1,3,5,6,8,10
+    dc.b    14, 0,1,3,5,6,8,10,12,13,15,17,18,20,22,0
 scale7:
-    dc.b    7, 0,1,3,5,6,8,12
+    dc.b    12, 0,1,3,5,6,8,12,13,15,17,18,20,0,0,0
 
 ;-----period values-----------
     CNOP    0,4
 ptab8:
-    dc.w    1600, 1512, 1424, 1344, 1272, 1200, 1128, 1064
+    dc.w    2016, 1904, 1798, 1696, 1600, 1512, 1424, 1344, 1272, 1200, 1128, 1064
 ptab:
 ptab4:
     dc.w    1008, 952, 896, 848, 800, 756, 712, 672, 636, 600, 564, 532
@@ -81,4 +84,6 @@ ptab1:
     dc.w    252, 238, 224, 212, 200, 189, 178, 168, 159, 150, 141, 133
 ptab0:
     dc.w    126, 119, 112, 106, 100, 95, 89, 84, 80, 75, 71, 67
+ptabx:
+    dc.w    63, 59, 56, 53, 50, 47, 45, 42, 40, 37, 35, 33
 
