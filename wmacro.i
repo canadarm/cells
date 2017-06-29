@@ -2,7 +2,7 @@
 ; uses given ar,dr1,dr2,dr3
 waitr       MACRO
     IFND DEBUG
-    move.w  #$CA,\2             ; $138 PAL, $CB NTSC
+    move.w  #$CB,\2             ; $138 PAL, $CB NTSC
     move.l  #$1ff00,\4
     lsl.l   #8,\2
     and.l   \4,\2
@@ -38,6 +38,14 @@ waitblt     MACRO
 .waitblt\@
     btst.b  #6,_DMACONR
     bne     .waitblt\@
+    ENDC
+    ENDM
+
+; library call, uses a6
+waitbltr    MACRO
+    IFND DEBUG
+    move.l  gfxbase,a6
+    jsr     -228(a6)
     ENDC
     ENDM
 

@@ -3,8 +3,11 @@
     INCLUDE "wmacro.i"
     INCLUDE "hwdefs.i"
     INCDIR  "Include/"
-    INCLUDE "exec/exec_lib.i"
-    INCLUDE "exec/nodes.i"
+;   INCLUDE "exec/exec_lib.i"
+;   INCLUDE "exec/nodes.i"
+;   INCLUDE "exec/interrupts.i"
+;   INCLUDE "exec/inputevent.i"
+
 ;-----macro defs-----------
 ;DEBUG       SET 1
 ;NOGRAPH     SET 1
@@ -82,44 +85,50 @@ F_PERF      equ 1                       ; move to perfect flag
 ; 120 bpm = 32dq/s ~ 22371 (NTSC)
 ; 60hz ~ 11934 (NTSC)
 period      equ 14800           ; timer interrupt period
-kbhs        equ 120             ; keyboard handshake duration - 02 clocks
+kbhs        equ 96              ; keyboard handshake duration - 02 clocks
 
 ;-----entry point----------
 ; most of the CIA saving is trying
 ; to allow asmone to recover after close.
 ; however, this is only a convenience issue..
-    SECTION amc,CODE
+    SECTION main,CODE
     CNOP    0,4
 init:
-    movem.l d1-d6/a0-a6,-(sp)
-    move.w  _DMACONR,d1         ; save control regs
-    move.w  _INTENAR,d2   
-    move.w  _INTREQR,d3
-    move.w  _ADKCONR,d4
-    movem.l d1-d4,-(sp)
-    move.l  #CIAB,a6            ; save CIA-B regs
-    move.b  CIACRA(a6),d2
-    move.b  CIACRB(a6),d3
-    move.b  CIAICR(a6),d4
-    move.b  CIATBLO(a6),d5
-    move.b  CIATBHI(a6),d6
-    movem.l d2-d6,-(sp)
-    move.l  #CIAA,a6            ; save CIA-A regs
-    move.b  CIACRA(a6),d1
-    move.b  CIAICR(a6),d2
-    move.b  CIATBLO(a6),d3
-    move.b  CIATBHI(a6),d4
-    movem.l d1-d4,-(sp)
+    movem.l d1-d7/a0-a6,-(sp)
     move.l  4.w,a6              ; get execbase
     clr.l   d0                  ; start lib calls
     move.l  #gfxname,a1     
     jsr     -552(a6)            ; openlibrary()
     move.l  d0,gfxbase          ; save result = gfxbase
     move.l  d0,a6
-    move.l  34(a6),d1           ; save viewport
-    move.l  38(a6),d2           ; save copper ptr
-    movem.l d1-d2,-(sp)
+    move.l  34(a6),viewport     ; save viewport
+    move.l  38(a6),copsave      ; save copper ptr
+    move.w  _DMACONR,d1         ; save control regs
+    move.w  _INTENAR,d2   
+    move.w  _INTREQR,d3
+    move.w  _ADKCONR,d4
+    movem.l d1-d4,-(sp)         ; save BPL controls
+    move.w  _BPLCON0,d1
+    move.w  _BPLCON1,d2
+    move.w  _BLTCON0,d3
+    move.w  _BLTCON1,d4
+    movem.l d1-d4,-(sp)
+    move.l  #CIAB,a5            ; save CIA-B regs
+    move.b  CIACRA(a5),d2
+    move.b  CIACRB(a5),d3
+    move.b  CIAICR(a5),d4
+    move.b  CIATBLO(a5),d5
+    move.b  CIATBHI(a5),d6
+    movem.l d2-d6,-(sp)
+    move.l  #CIAA,a5            ; save CIA-A regs
+    move.b  CIACRA(a5),d1
+    move.b  CIACRB(a5),d2
+    move.b  CIAICR(a5),d3
+    move.b  CIATBLO(a5),d4
+    move.b  CIATBHI(a5),d5
+    movem.l d1-d5,-(sp)
     IFND DEBUG
+    move.l  gfxbase,a6          ; load gfxbase
     move.l  #0,a1               ; graceful exit prep
     jsr     -222(a6)            ; LoadView
     jsr     -270(a6)            ; WaitTOF (x2)
@@ -142,6 +151,7 @@ init:
     move.w  #$F4C1,_DIWSTOP     ; diw-stop  = $F4C1 (NTSC, PAL 2CC1)
     move.w  #$0111,_COLOR00     ; bg color (0) 
     move.w  #$0FFF,_COLOR01     ; fg color (1)
+    move.w  #$0000,_BLTCON1     ; clear BLTCON1
     ENDC
 
 ;-----init bitplanes-------
@@ -314,11 +324,6 @@ init:
     beq     .nomod
     jsr     modulate
 .nomod:
-    btst    #F_TABMOD,flags2
-    beq     .notabmod
-    jsr     mktab
-    bclr    #F_TABMOD,flags2
-.notabmod:
     btst    #F_CLOCK8,flags
     beq     .noclock8
     jsr     settrig
@@ -336,40 +341,48 @@ init:
 
 ;-----exit code------------
 .exit:
+    IFND DEBUG
     move.w  #$7FFF,_INTENA      ; turn off interrupts
     move.l  #CIAB,a6
     move.l  #CIAA,a5
-    bclr.b  #0,CIACRB(a6)       ; stop timer
     move.b  #$7F,CIAICR(a6)     ; clear CIA-B interrupts
+    move.b  #$7F,CIAICR(a6)     ; ?
     move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
-    movem.l (sp)+,d1-d2         ; pop saved copper,view
-    movem.l (sp)+,d3-d6         ; pop CIA-A regs
+    move.b  #$7F,CIAICR(a5)     ; ?
+    bclr.b  #0,CIACRB(a6)       ; stop timer
+    ENDC
+    movem.l (sp)+,d2-d6         ; pop CIA-A regs
     IFND DEBUG
-    move.b  d3,CIACRA(a5)
+    move.b  d2,CIACRA(a5)
+    move.b  d3,CIACRB(a5)
     or.b    #$80,d4
     move.b  d4,CIAICR(a5)
     move.b  d5,CIATBLO(a5)
     move.b  d6,CIATBHI(a5)
     ENDC
-    movem.l (sp)+,d5-d6         ; pop CIA-B timer regs
+    movem.l (sp)+,d2-d6         ; pop CIA-B regs
     IFND DEBUG
+    move.b  d2,CIACRA(a6)
+    move.b  d3,CIACRB(a6)
+    or.b    #$80,d4
+    move.b  d4,CIAICR(a6)
     move.b  d5,CIATBLO(a6)
     move.b  d6,CIATBHI(a6)
     ENDC
-    movem.l (sp)+,d3-d5         ; pop CIA-B control regs
+    movem.l (sp)+,d3-d6         ; pop BPL controls
     IFND DEBUG
-    move.b  d3,CIACRA(a6)
-    move.b  d4,CIACRB(a6)
-    or.b    #$80,d5
-    move.b  d5,CIAICR(a6)
+    move.w  d3,_BPLCON0
+    move.w  d4,_BPLCON1
+    move.w  d5,_BLTCON0
+    move.w  d6,_BLTCON1
     ENDC
     movem.l (sp)+,d3-d6         ; pop saved system control regs
     IFND DEBUG
-    or.w    #$8000,d3           ; write bit
     move.w  #$7FFF,_DMACON  
+    or.w    #$8000,d3           ; write bit
     move.w  d3,_DMACON
-    or.w    #$8000,d4
     move.w  #$7FFF,_INTENA      ; disable ints before resotre
+    or.w    #$8000,d4
     move.l  savelvl2,d0         ; restore lvl2 handler
     move.l  d0,$68.w
     move.l  savelvl3,d0         ; restore lvl3 handler
@@ -377,21 +390,21 @@ init:
     move.l  savelvl6,d0         ; restore lvl6 handler
     move.l  d0,$78.w
     move.w  d4,_INTENA          ; restore interrupts
-    or.w    #$8000,d5
     move.w  #$7FFF,_INTREQ      ; clear pending
     move.w  #$7FFF,_INTREQ
+    or.w    #$8000,d5
     move.w  d5,_INTREQ          ; restore reqs
+    move.w  #$7FFF,_ADKCON
+    move.w  #$7FFF,_ADKCON
     or.w    #$8000,d6
-    move.w  #$7FFF,_ADKCON
-    move.w  #$7FFF,_ADKCON
     move.w  d6,_ADKCON
-    move.l  d2,_COP1LCH         ; restore copper
     move.l  gfxbase,a6          ; get gfxbase
-    move.l  d1,a1               ; saved view
+    move.l  viewport,a1         ; saved view
     jsr     -222(a6)            ; LoadView
     jsr     -270(a6)            ; WaitTOF (x2)
     jsr     -228(a6)            ; WaitBlit
     jsr     -462(a6)            ; Disown
+    move.l  copsave,_COP1LCH    ; restore copper
     ENDC
     move.l  4.w,a6              ; get execbase
     move.l  gfxbase,a1          ; gfx ptr
@@ -401,18 +414,14 @@ init:
     ENDC
 .return:
 .xx:
-    movem.l (sp)+,d1-d6/a0-a6
+    movem.l (sp)+,d1-d7/a0-a6
     move.w  #1,d0
-    move.l  seqgate,d1
-    move.l  seqtrig+seqlen*2,d2
-    move.l  seq+seqlen*4,d3
-    move.l  seq+seqlen*4+4,d4
     rts
 
 ;------interrupts----------
 
 keyint:
-    movem.l d4-d6/a0-a1,-(sp)
+    movem.l d0-d7/a0-a6,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #3,d0               ; PORTS handler
     beq     .exit
@@ -420,7 +429,7 @@ keyint:
     btst    #3,CIAICR(a0)       ; test SP bit
     beq     .exit
     move.b  CIASDR(a0),d6       ; load serial data
-    or.b    #$01,CIACRB(a0)     ; start CIA-A TB (one shot)
+    bset    #0,CIACRB(a0)       ; start CIA-A TB (one shot)
     or.b    #$40,CIACRA(a0)     ; set output mode (handshake)
     not.b   d6                  ; decode key
     lsr.b   #1,d6
@@ -429,18 +438,18 @@ keyint:
     move.w  d6,key
     bset    #F_KEY,flags 
 .handshake:
-    moveq   #2,d6               ; busy wait for timer underflow
+    move.b  #2,d6               ; busy wait for timer underflow
     and.b   CIAICR(a0),d6
     beq     .handshake
     and.b   #$BF,CIACRA(a0)     ; set input mode
 .exit:
     move.w  #$4008,_INTREQ      ; clear INTREQ
     move.w  #$4008,_INTREQ      ; ... twice
-    movem.l (sp)+,d4-d6/a0-a1
+    movem.l (sp)+,d0-d7/a0-a6
     rte
     
 vblankint:
-    movem.l d1-d6/a0-a1,-(sp)
+    movem.l d0-d7/a0-a6,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #5,d0               ; VBLANK handler
     beq     .exit
@@ -474,7 +483,7 @@ vblankint:
     lea     cbuf,a0             ; source address
     jsr     copystate           ; render new state
 .nodraw:
-    bset    #F_TABMOD,flags2    ; do table mod
+    jsr     mktab
     lea     seqstate,a0         ; envelope state
     move.l  #_AUD0LC,a1         ; audio ptr
     clr.l   d3                  ; zero volume reg
@@ -495,13 +504,14 @@ vblankint:
 .exit:
     move.w  #$4020,_INTREQ      ; clear INTREQ
     move.w  #$4020,_INTREQ      ; ... twice
-    movem.l (sp)+,d1-d6/a0-a1
+    movem.l (sp)+,d0-d7/a0-a6
     rte
 
 timerint:
-    movem.l d0-d6/a0-a3,-(sp)
+    movem.l d0-d7/a0-a6,-(sp)
     move.w  _INTREQR,d0         ; check req mask
-    btst    #13,d0              ; PORTS handler
+;   btst    #13,d0              ; PORTS handler
+    and.w   #$2000,d0
     beq     .exit
     move.l  #CIAB,a0            ; CIA-B base
     btst    #1,CIAICR(a0)
@@ -540,7 +550,7 @@ timerint:
 .exit:
     move.w  #$6000,_INTREQ      ; clear INTREQ
     move.w  #$6000,_INTREQ      ; ... twice
-    movem.l (sp)+,d0-d6/a0-a3
+    movem.l (sp)+,d0-d7/a0-a6
     rte
 
 ;-----tables---------------
@@ -550,7 +560,7 @@ timerint:
     INCLUDE "pattern.i"
 
 ;------locals--------------
-    SECTION amd,DATA
+    SECTION state,DATA_F
     EVEN
 fgcol:
     dc.w    0                   ; foreground color mod
@@ -599,7 +609,7 @@ count:
     EVEN
 
 ;------saves/system--------
-    SECTION amd,DATA
+    SECTION saves,DATA
     EVEN
 dbg:
     dc.l    0
@@ -611,10 +621,15 @@ savelvl6:
     dc.l    0                   ; saved lvl6 handler
 gfxbase:
     dc.l    0
+viewport:
+    dc.l    0
+copsave:
+    dc.l    0
 gfxname:
     dc.b    "graphics.library",0
 
 ;-----cell state-----------
+    SECTION cellst,DATA_F
     CNOP    0,4
 state:
     ds.b    stsize
@@ -668,9 +683,9 @@ nextmod:
 modflags:
     dc.w    0                   ; modulation state
 seqptr:
-    dc.l    sin32
     dc.l    sq32
-    dc.l    sq32
+    dc.l    noise32
+    dc.l    saw32  
     dc.l    sin32
 
 ;-----sequencer addressing----
@@ -688,13 +703,13 @@ SQC         equ     (seqrcnt-seqstate)
 SQX         equ     (seqdis-seqstate)
 
 ;-----wave buffers---------
-    SECTION ambss,BSS_C
+    SECTION wave,BSS_C
     CNOP    0,4
 wav:
     ds.w    ncols*tabsizew
 
 ;-----copper lists---------
-    SECTION amdc,DATA_C
+    SECTION cop,DATA_C
     CNOP    0,4
 copstart:
     dc.w    BPL1PTL_
@@ -709,7 +724,7 @@ coplist:
 ;   dc.w    INTREQ_,$8010   ; trigger lvl3 irq
 
 ;-----bitplanes------------
-    SECTION ambss,BSS_C
+    SECTION planes,BSS_C
     CNOP    0,4
 bgpl:
     ds.b    bplsize
@@ -720,7 +735,7 @@ cbuf:
     ds.b    stwidth*csize     ; state display buffer
 
 ;-----functions------------
-    SECTION amc,CODE
+    SECTION funcs,CODE_F
 
 ;-----settrig()-------------
 ; Set sequence triggers from maj array.
@@ -1296,7 +1311,6 @@ randstate:
     CNOP      0,4
 mktab:
     lea     wav,a0              ; dest position
-    lea     saw32,a1            ; source A
     lea     mtab32,a2           ; source B (mask)
     lea     seqptr,a5
     lea     seqstate,a6

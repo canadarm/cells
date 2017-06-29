@@ -109,14 +109,27 @@ cskip       equ   height/ctabsize
 ; most of the CIA saving is trying
 ; to allow asmone to recover after close.
 ; however, this is only a convenience issue..
-    SECTION amc,CODE
+    SECTION main,CODE
     CNOP    0,4
 init:
-    movem.l d1-d6/a0-a6,-(sp)
+    movem.l d1-d7/a0-a6,-(sp)
+    move.l  4.w,a6              ; get execbase
+    clr.l   d0                  ; start lib calls
+    move.l  #gfxname,a1     
+    jsr     -552(a6)            ; openlibrary()
+    move.l  d0,gfxbase          ; save result = gfxbase
+    move.l  d0,a6
+    move.l  34(a6),viewport     ; save viewport
+    move.l  38(a6),copsave      ; save copper ptr
     move.w  _DMACONR,d1         ; save control regs
     move.w  _INTENAR,d2   
     move.w  _INTREQR,d3
     move.w  _ADKCONR,d4
+    movem.l d1-d4,-(sp)
+    move.w  _BPLCON0,d1         ; save BPL controls
+    move.w  _BPLCON1,d2
+    move.w  _BLTCON0,d3
+    move.w  _BLTCON1,d4
     movem.l d1-d4,-(sp)
     move.l  #CIAB,a6            ; save CIA-B regs
     move.b  CIACRA(a6),d2
@@ -131,16 +144,8 @@ init:
     move.b  CIATBLO(a6),d3
     move.b  CIATBHI(a6),d4
     movem.l d1-d4,-(sp)
-    move.l  4.w,a6              ; get execbase
-    clr.l   d0                  ; start lib calls
-    move.l  #gfxname,a1     
-    jsr     -552(a6)            ; openlibrary()
-    move.l  d0,gfxbase          ; save result = gfxbase
-    move.l  d0,a6
-    move.l  34(a6),d1           ; save viewport
-    move.l  38(a6),d2           ; save copper ptr
-    movem.l d1-d2,-(sp)
     IFND DEBUG
+    move.l  d0,a6               ; load gfxbase
     move.l  #0,a1               ; graceful exit prep
     jsr     -222(a6)            ; LoadView
     jsr     -270(a6)            ; WaitTOF (x2)
@@ -394,7 +399,6 @@ init:
     move.b  #$7F,CIAICR(a6)     ; clear CIA-B interrupts
     move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
     ENDIF
-    movem.l (sp)+,d1-d2         ; pop saved copper,view
     movem.l (sp)+,d3-d6         ; pop CIA-A regs
     IFND DEBUG
     move.b  d3,CIACRA(a5)
@@ -414,6 +418,13 @@ init:
     move.b  d4,CIACRB(a6)
     or.b    #$80,d5
     move.b  d5,CIAICR(a6)
+    ENDC
+    movem.l (sp)+,d3-d6         ; pop BPL controls
+    IFND DEBUG
+    move.w  d3,_BPLCON0
+    move.w  d4,_BPLCON1
+    move.w  d5,_BLTCON0
+    move.w  d6,_BLTCON1
     ENDC
     movem.l (sp)+,d3-d6         ; pop saved system control regs
     IFND DEBUG
@@ -437,13 +448,13 @@ init:
     move.w  #$7FFF,_ADKCON
     move.w  #$7FFF,_ADKCON
     move.w  d6,_ADKCON
-    move.l  d2,_COP1LCH         ; restore copper
     move.l  gfxbase,a6          ; get gfxbase
-    move.l  d1,a1               ; saved view
+    move.l  viewport,a1         ; saved view
     jsr     -222(a6)            ; LoadView
     jsr     -270(a6)            ; WaitTOF (x2)
     jsr     -228(a6)            ; WaitBlit
     jsr     -462(a6)            ; Disown
+    move.l  copsave,_COP1LCH    ; restore copper
     ENDC
     move.l  4.w,a6              ; get execbase
     move.l  gfxbase,a1          ; gfx ptr
@@ -453,7 +464,7 @@ init:
     ENDC
 .return:
 .xx:
-    movem.l (sp)+,d1-d6/a0-a6
+    movem.l (sp)+,d1-d7/a0-a6
     rts
 
 ;------interrupts----------
@@ -592,7 +603,8 @@ vblankint:
 timerint:
     movem.l d0-d6/a0-a3,-(sp)
     move.w  _INTREQR,d0         ; check req mask
-    btst    #13,d0              ; PORTS handler
+;   btst    #13,d0              ; PORTS handler
+    and.w   #$2000,d0
     beq     .exit
     move.l  #CIAB,a0            ; CIA-B base
     btst    #1,CIAICR(a0)
@@ -627,7 +639,7 @@ timerint:
     INCLUDE "pattern.i"
 
 ;------saves/system--------
-    SECTION amd,DATA
+    SECTION state,DATA_F
     CNOP    0,4
 flags: ;$2679A4
     dc.w    0                   ; state flags
@@ -639,6 +651,9 @@ bpos:
     dc.w    0                   ; buffer position
 pos:
     dc.w    0
+
+    SECTION saves,DATA
+    CNOP    0,4
 savelvl2:
     dc.l    0                   ; saved lvl2 handler
 savelvl3:
@@ -647,11 +662,15 @@ savelvl6:
     dc.l    0                   ; saved lvl6 handler
 gfxbase:
     dc.l    0
+viewport:
+    dc.l    0
+copsave:
+    dc.l    0
 gfxname:
     dc.b    "graphics.library",0
   
 ;-----locals---------------
-    SECTION amd,DATA
+    SECTION pos,DATA_F
     CNOP    0,4
 bplpos: ;$2679D0
     dc.w    0                   ; bitplane offset for render
@@ -667,7 +686,7 @@ count: ;$2679D9
     dc.b    0                   ; step counter
 
 ;-----wave buffers---------
-    SECTION ambss,BSS_C
+    SECTION wave,BSS_C
     CNOP    0,4
 wav0:
     ds.w    wavsizew
@@ -675,7 +694,7 @@ wav1:
     ds.w    wavsizew
 
 ;-----cell buffers---------
-    SECTION amdc,DATA_C
+    SECTION cells,DATA_C
     CNOP    0,4
 buf:
     ds.l    hsizel              ; state buffer 
@@ -686,7 +705,7 @@ spr1:
     ds.l    sprsizel            ; display pattern 1
 
 ;-----pattern data--------
-    SECTION amd,DATA
+    SECTION pattern,DATA_F
     CNOP    0,4
 pat0:
     dc.l    0                   ; pattern address 0
@@ -722,13 +741,13 @@ state:
     ds.b    stsize
 
 ;-----leads data-----------
-    SECTION amd,DATA
+    SECTION scales,DATA_f
     CNOP    0,4
 scale:
     ds.w    sclen             ; scale lists
 scoct:
     ds.w    sclen
-    SECTION amdf,DATA_F
+    SECTION seq,DATA_F
     CNOP    0,4
 ldstate:
 ldnote:
@@ -777,7 +796,7 @@ LDE         equ   (ldenv-ldparms)
 LDL         equ   (ldlvl-ldparms)
 
 ;-----copper lists---------
-    SECTION amdc,DATA_C
+    SECTION cop,DATA_C
     CNOP    0,4
 copstart:
     dc.w    BPL1PTL_
@@ -796,7 +815,7 @@ coplist:
     dcb.l   64, CL_END
 
 ;-----bitplanes------------
-    SECTION ambss,BSS_C
+    SECTION planes,BSS_C
     CNOP    0,4
 bgpl:
     ds.b    bplsize-width*pwidth
@@ -829,7 +848,7 @@ ctab:
     dc.w    $024A
 
 ;-----functions------------
-    SECTION amc,CODE
+    SECTION funcs,CODE_F
    
 ;-----loadpat(d1)-------
 ; load patterns at index d1 into buffers spr0/1
