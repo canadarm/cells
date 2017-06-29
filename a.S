@@ -56,6 +56,7 @@ F_CLOCK16   equ 6               ; 16 tick event
 F_CLOCK8    equ 7               ; 8 tick event
 ;-----flag2 bits-----------
 F_RAND      equ 0               ; randomize next
+F_TABMOD    equ 1               ; mod tables next
 F_ERR       equ 7               ; error exit
 
 ;-----buffer defs----------
@@ -193,12 +194,22 @@ init:
     move.b  #seqlen,SQLN(a0)    ; length
     move.b  #90,SQV(a0)         ; volume
     move.b  #8,SQD(a0)          ; decay
+    move.b  #0,SQT(a0)          ; table pos
+    move.b  #2,SQR(a0)          ; table mod rate
+    move.b  #0,SQC(a0)          ; table mod count
+    move.b  #0,SQX(a0)          ; enable
     move.b  d4,d3
     and.b   #1,d3
     add.b   #1,d3
     move.b  d3,SQO(a0)          ; octave
     addq    #1,a0
     dbra    d4,.initseq
+; tweaks
+  move.b  #4,seqstate+SQT+1
+  move.b  #8,seqstate+SQT+2
+  move.b  #16,seqstate+SQT+3
+  move.b  #12,seqstate+SQR+0
+  move.b  #10,seqstate+SQR+3
     move.w  #0,d0
     jsr     mkseq
     move.w  #1,d0
@@ -207,6 +218,20 @@ init:
     jsr     mkseq
     move.w  #3,d0
     jsr     mkseq
+
+;-----init audio-----------
+    jsr     mktab
+    move.l  #_AUD0LC,a6
+    move.l  #wav,d5
+    move.w  #ncols-1,d6
+.audlp:
+    move.w  #tabsizew,4(a6)
+    clr.w   6(a6)
+    clr.w   8(a6)
+    move.l  d5,(a6)
+    add.l   #tabsize,d5
+    add.l   #AUDOFFSET,a6
+    dbra    d6,.audlp
 
 ;-----init metrics---------
     lea     oncount,a0
@@ -289,6 +314,11 @@ init:
     beq     .nomod
     jsr     modulate
 .nomod:
+    btst    #F_TABMOD,flags2
+    beq     .notabmod
+    jsr     mktab
+    bclr    #F_TABMOD,flags2
+.notabmod:
     btst    #F_CLOCK8,flags
     beq     .noclock8
     jsr     settrig
@@ -444,6 +474,7 @@ vblankint:
     lea     cbuf,a0             ; source address
     jsr     copystate           ; render new state
 .nodraw:
+    bset    #F_TABMOD,flags2    ; do table mod
     lea     seqstate,a0         ; envelope state
     move.l  #_AUD0LC,a1         ; audio ptr
     clr.l   d3                  ; zero volume reg
@@ -461,10 +492,6 @@ vblankint:
     add.l   #AUDOFFSET,a1       ; next channel
     addq    #1,a0               ; next track
     dbra    d4,.loop 
-    btst    #F_COLOR,flags
-    beq     .exit
-    jsr     colormod
-    bclr    #F_COLOR,flags
 .exit:
     move.w  #$4020,_INTREQ      ; clear INTREQ
     move.w  #$4020,_INTREQ      ; ... twice
@@ -627,11 +654,24 @@ seqvol:
     ds.b    ncols               ; volume
 seqdec:
     ds.b    ncols               ; decay
+seqtab:
+    ds.b    ncols               ; mod table position
+seqrate:
+    ds.b    ncols               ; table mod rate
+seqrcnt:
+    ds.b    ncols               ; mod counter
+seqdis:
+    ds.b    ncols               ; global disable
     EVEN
 nextmod:
     dc.w    0                   ; next voice to modulate
 modflags:
     dc.w    0                   ; modulation state
+seqptr:
+    dc.l    sin32
+    dc.l    sq32
+    dc.l    sq32
+    dc.l    sin32
 
 ;-----sequencer addressing----
 SQP         equ     (seqpos-seqstate)
@@ -642,6 +682,16 @@ SQV         equ     (seqvol-seqstate)
 SQD         equ     (seqdec-seqstate)
 SQO         equ     (seqoct-seqstate)
 SQM         equ     (seqmod-seqstate)
+SQT         equ     (seqtab-seqstate)
+SQR         equ     (seqrate-seqstate)
+SQC         equ     (seqrcnt-seqstate)
+SQX         equ     (seqdis-seqstate)
+
+;-----wave buffers---------
+    SECTION ambss,BSS_C
+    CNOP    0,4
+wav:
+    ds.w    ncols*tabsizew
 
 ;-----copper lists---------
     SECTION amdc,DATA_C
@@ -714,7 +764,7 @@ setseq:
     move.w  #ncols-1,d6     ; loop counter
 .loop:
     move.b  (a0)+,d0        ; count
-    lsr.b   #3,d0           ; divide by 8
+    lsr.b   #2,d0           ; divide by 4
     add.b   #2,d0           ; add 2
     cmp.b   #seqlen,d0      ; saturate  
     blt.b   .nosat
@@ -977,11 +1027,13 @@ playseq:
     move.b  d5,SQP(a3)        ; new position
     cmp.b   #0,(a6,d4)        ; check for 0 trigger
     beq.b   .notrig
-    clr.w   d2
     move.b  SQV(a3),d2
+    cmp.b   #0,SQX(a3)        ; check enable
+    beq     .cont
+    clr.b   d2
+.cont:
     move.b  d2,SQL(a3)        ; level
-    move.w  #TABSIZE,4(a4)    ; length
-    move.l  #wav32,0(a4)      ; pointer FIXME: do in advance or modulate etc
+    ext.w   d2
     move.w  d2,8(a4)          ; volume
     move.w  d3,6(a4)          ; period
 .notrig:
@@ -1002,7 +1054,11 @@ handlekb:
     bge.b   .row2
     cmp.b   #$10,d6
     bge.b   .row1
-    bra     .done
+.row0:
+    lea     seqdis,a1
+    and.w   #$03,d6
+    eor.b   #1,(a1,d6.w)
+    bra     .done     
 .row1:
     lea     seqdec,a1
     and.w   #$03,d6
@@ -1113,24 +1169,6 @@ modulate:
     jsr     mkseq               ; compute new sequences
     rts
 
-;-----colormod()-----------
-; modulate colors.
-; uses d5,d6
-    CNOP    0,4
-colormod:
-    move.w  fgcol,d5
-    move.w  bgcol,d6
-    add.w   #$0001,d5 
-    move.w  d5,fgcol
-    add.w   #fgbase,d5
-    and.w   #$FFF,d5
-    move.w  d5,_COLOR01 
-    add.w   #$0011,d6 
-    move.w  d6,bgcol
-    and.w   #bgmax,d6
-    move.w  d6,_COLOR00
-    rts
-
 ;-----pack()---------------
 ; pack state at d0 into packed as dword.
 ; uses d0-d3,d6,a6
@@ -1235,6 +1273,7 @@ rng:
 ;-----randstate()-----------
 ; randomize the current state
 ; uses d0,d4-d6,a1
+    CNOP      0,4
 randstate:
     lea     state,a1
     move.w  pos,d4              ; get current position
@@ -1249,6 +1288,46 @@ randstate:
     move.b  d6,(a1,d4.w)
     add.w   #1,d4
     dbra    d5,.randloop
+    rts
+
+;-----mktab()--------------
+; set wave tables with blitter, and
+; update sequence modulation
+    CNOP      0,4
+mktab:
+    lea     wav,a0              ; dest position
+    lea     saw32,a1            ; source A
+    lea     mtab32,a2           ; source B (mask)
+    lea     seqptr,a5
+    lea     seqstate,a6
+    move.w  #(tabsizew+$40),d1  ; set size for 1 line
+    move.w  #$0D30,_BLTCON0     ; set params (A,B,D), LF AB'
+    move.l  a0,_BLTDPT
+    clr.w   _BLTAMOD            ; clear modulos
+    clr.w   _BLTBMOD
+    clr.w   _BLTDMOD
+    clr.w   d3                  ; param position
+    move.w  #ncols-1,d6         ; loop counter
+.tabloop:
+    move.b  SQM(a6,d3.w),d5     ; mod position 
+    move.b  SQC(a6,d3.w),d4     ; check count
+    add.b   #1,d4
+    cmp.b   SQR(a6,d3.w),d4     ; check for count max
+    blt     .done
+    ext.w   d5
+    lea     (a2,d5.w),a3        ; form mod address
+    move.l  a3,_BLTBPT          ; set mask pointer
+    move.l  (a5)+,_BLTAPT       ; set source pointer
+    waitblt
+    move.w  d1,_BLTSIZE         ; start blit 
+    clr.b   d4                  ; reset count
+    add.b   #2,d5               ; increment pos  
+    and.b   #modsize-1,d5       ; clamp
+.done:
+    move.b  d4,SQC(a6,d3.w)     ; update count
+    move.b  d5,SQM(a6,d3.w)     ; update position
+    add.w   #1,d3               ; next params
+    dbra    d6,.tabloop
     rts
 
 ;------------------------------------------------------------------------------
