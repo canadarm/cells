@@ -78,7 +78,7 @@ F_PERF      equ 1                       ; move to perfect flag
 ; 120 bpm = 32dq/s ~ 22371 (NTSC)
 ; 60hz ~ 11934 (NTSC)
 period      equ 14800           ; timer interrupt period
-kbhs        equ 95              ; keyboard handshake duration - 02 clocks
+kbhs        equ 120             ; keyboard handshake duration - 02 clocks
 
 ;-----entry point----------
 ; most of the CIA saving is trying
@@ -244,8 +244,9 @@ init:
     move.l  #CIAB,a6            ; CIA-B base
     move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
     move.b  #$7F,CIAICR(a6)     ; clear CIA-B interrupts
-    and.b   #$18,CIACRA(a5)     ; CIA-A TA: one-shot, KB input mode
-    and.b   #$C0,CIACRA(a6)     ; CIA-B TB: continuous, pulse, PB6OFF
+    move.b  #$18,CIACRA(a5)     ; CIA-A TA: one-shot, KB input mode
+    and.b   #$80,CIACRA(a6)     ; CIA-B TB: continuous, pulse, PB6OFF
+    or.b    #$10,CIACRB(a6)     ;
     move.b  #(period&$FF),CIATBLO(a6) ; set CIA-B timer B period 
     move.b  #(period>>8),CIATBHI(a6)  ; ..for timer interrupt
     move.b  #(kbhs&$FF),CIATBLO(a5)   ; set CIA-A timer B period
@@ -304,7 +305,6 @@ init:
     movem.l (sp)+,d1-d2         ; pop saved copper,view
     movem.l (sp)+,d3-d6         ; pop CIA-A regs
     IFND DEBUG
-    or.b    #$80,d3             ; write bit
     move.b  d3,CIACRA(a5)
     or.b    #$80,d4
     move.b  d4,CIAICR(a5)
@@ -318,9 +318,7 @@ init:
     ENDC
     movem.l (sp)+,d3-d5         ; pop CIA-B control regs
     IFND DEBUG
-    or.b    #$80,d3             ; write bit
     move.b  d3,CIACRA(a6)
-    or.b    #$80,d4 
     move.b  d4,CIACRB(a6)
     or.b    #$80,d5
     move.b  d5,CIAICR(a6)
@@ -344,6 +342,7 @@ init:
     move.w  #$7FFF,_INTREQ
     move.w  d5,_INTREQ          ; restore reqs
     or.w    #$8000,d6
+    move.w  #$7FFF,_ADKCON
     move.w  #$7FFF,_ADKCON
     move.w  d6,_ADKCON
     move.l  d2,_COP1LCH         ; restore copper
@@ -462,7 +461,7 @@ vblankint:
     rte
 
 timerint:
-    movem.l d1-d6/a0-a6,-(sp)
+    movem.l d0-d6/a0-a3,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #13,d0              ; PORTS handler
     beq     .exit
@@ -503,7 +502,7 @@ timerint:
 .exit:
     move.w  #$6000,_INTREQ      ; clear INTREQ
     move.w  #$6000,_INTREQ      ; ... twice
-    movem.l (sp)+,d1-d6/a0-a6
+    movem.l (sp)+,d0-d6/a0-a3
     rte
 
 ;-----tables---------------

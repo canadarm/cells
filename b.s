@@ -76,18 +76,16 @@ F_DATA      equ 2               ; data on LPT
 F_MATCH0    equ 3               ; match on pat0
 F_MATCH1    equ 4               ; match on pat1
 F_MATCH     equ 5               ; match on either
-F_MOD       equ 6
-F_ENV       equ 7               ; update envelopes
+F_ENV       equ 6               ; update envelopes
+F_MOD       equ 7               ; modulate
 ;------flag2 bits----------
 F_PLAY      equ 0               ; play next interval
+F_ERR       equ 1
 
 ;-----sequencer defs-------
-E_ATT       equ 0
-E_DEC       equ 1
-E_SUS       equ 2
+E_ATT       equ 1
+E_DEC       equ 2
 E_REL       equ 3
-E_MASK      equ 4
-F_NOTEON    equ 7
 
 ;-----timing defs----------
 ; one tick = 1.396825ms (clock interval is 279.365 nanoseconds)
@@ -241,14 +239,29 @@ init:
 
 ;-----init lead params-----
     lea     ldstate,a6
-    move.w  #ldsize-1,d6
+    move.w  #ldsize/4-1,d6
 .initld:
-    clr.b   (a6)+
+    clr.l   (a6)+
     dbra    d6,.initld
     lea     ldstate,a6
-    move.w  #$2020,LDV(a6)
-    move.w  #$0100,LDO(a6)
+    move.w  #110,LDI(a6)
+    move.w  #100,LDV(a6)
+    move.w  #0,LDA(a6)
+    move.w  #24,LDD(a6)
+    move.w  #50,LDS(a6)
+    move.w  #1,LDR(a6)
+    move.w  #1,LDO(a6)
+    add.l   #2,a6
+    move.w  #60,LDI(a6)
+    move.w  #100,LDV(a6)
+    move.w  #12,LDA(a6)
+    move.w  #8,LDD(a6)
+    move.w  #60,LDS(a6)
+    move.w  #1,LDR(a6)
+    move.w  #0,LDO(a6)
     move.b  #0,mode
+    lea     ldlvl,a6
+    move.w  #120,(a6)+
   
 
 ;-----init rng-------------
@@ -318,7 +331,7 @@ init:
     waitr   a1,d0,d1,d2
     bset.b  #0,CIACRB(a6)       ; start CIA-B TB
     move.w  _COPJMP1,d0         ; start copper
-    move.w  #$8000,_ADKCON      ; clear mod bits
+    move.w  #$0088,_ADKCON      ; clear mod bits
     move.w  #$7FFF,_DMACON      
     move.w  #DMAF_ALLA,_DMACON  ; start DMA
     ENDC
@@ -341,17 +354,23 @@ init:
     bclr    #F_DATA,flags
     jsr     match
 .nodata:
+    btst    #F_ENV,flags
+    beq     .noenv
+    bclr    #F_ENV,flags
+    jsr     doenv
+.noenv:
     btst    #F_PLAY,flags2
     beq     .notrig
     bclr    #F_PLAY,flags2
     jsr     playlead
 .notrig:
-    cmp.w   #0,err
+    btst    #F_ERR,flags2
     beq     .endmain
     move.w  #$7FFF,_INTENA      ; turn off interrupts
-.errloop:
+.errlp
     btst    #6,$bfe001
-    bne     .errloop
+    bne     .errlp
+    bra     .exit
 .endmain:
     btst    #6,$bfe001
     bne     .mainloop
@@ -427,8 +446,6 @@ init:
 .return:
 .xx:
     movem.l (sp)+,d1-d6/a0-a6
-    move.w  #1,d0
-    move.l  dbg,d0
     rts
 
 ;------interrupts----------
@@ -479,10 +496,12 @@ keyint:
     rte
 
 vblankint:
-    movem.l d1-d6/a0-a3,-(sp)
+    movem.l d0-d6/a0-a3,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #5,d0               ; VBLANK handler
     beq     .exit
+;   jsr     doenv
+    bset    #F_ENV,flags
     btst    #F_STEP,flags
     beq     .nostep
     bclr    #F_STEP,flags
@@ -559,11 +578,11 @@ vblankint:
 .exit:
     move.w  #$4020,_INTREQ      ; clear INTREQ
     move.w  #$4020,_INTREQ      ; ... twice
-    movem.l (sp)+,d1-d6/a0-a3
+    movem.l (sp)+,d0-d6/a0-a3
     rte
 
 timerint:
-    move.l  a0,-(sp)
+    movem.l d0-d6/a0-a3,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #13,d0              ; PORTS handler
     beq     .exit
@@ -590,7 +609,7 @@ timerint:
 .exit:
     move.w  #$6000,_INTREQ      ; clear INTREQ
     move.w  #$6000,_INTREQ      ; ... twice
-    move.l  (sp)+,a0
+    movem.l (sp)+,d0-d6/a0-a3
     rte
 
 ;-----tables---------------
@@ -602,7 +621,7 @@ timerint:
 ;------saves/system--------
     SECTION amd,DATA
     CNOP    0,4
-flags:
+flags: ;$2679A4
     dc.w    0                   ; state flags
 flags2:
     dc.w    0                   ; state flags
@@ -626,7 +645,7 @@ gfxname:
 ;-----locals---------------
     SECTION amd,DATA
     CNOP    0,4
-bplpos:
+bplpos: ;$2679D0
     dc.w    0                   ; bitplane offset for render
 coprpos:
     dc.w    0                   ; copper offset  
@@ -636,7 +655,7 @@ drawpos:
     EVEN
 cpos:
     dc.b    0                   ; scroll position mod 8
-count:
+count: ;$2679D9
     dc.b    0                   ; step counter
 
 ;-----wave buffers---------
@@ -658,6 +677,7 @@ spr0:
 spr1:
     ds.l    sprsizel            ; display pattern 1
 
+;-----pattern data--------
     SECTION amd,DATA
     CNOP    0,4
 pat0:
@@ -677,16 +697,8 @@ mx0:
     dc.w    0
 mx1:
     dc.w    0
-dbg:
-    dc.l    0
-mall0:
-    dc.l    0                   ; match mask 0
-mall1:
-    dc.l    0                   ; match masks 1
-err:
-    dc.w    0
 ptmp:
-    dc.b    0
+    dc.w    0
 
 ;-----cell state-----------
     IFD TEST
@@ -706,35 +718,38 @@ scale:
     ds.w    sclen             ; scale lists
 scoct:
     ds.w    sclen
+    SECTION amdf,DATA_F
     CNOP    0,4
 ldstate:
 ldnote:
-    ds.b    2                 ; current notes
+    ds.w    2                 ; current notes
 ldvoice:
-    ds.b    2                 ; current voice
+    ds.w    2                 ; current voice
 ldtrig:
-    ds.b    2                 ; triggers
+    ds.w    2                 ; triggers
 ldoct:
-    ds.b    2                 ; octaves
+    ds.w    2                 ; octaves
+ldinit:
+    ds.w    2                 ; init volumes
 ldvol:
-    ds.b    2                 ; max volumes
+    ds.w    2                 ; max volumes
 ldatt:
-    ds.b    2                 ; attack rates
+    ds.w    2                 ; attack rates
 lddec:
-    ds.b    2                 ; decay rates
+    ds.w    2                 ; decay rates
 ldsus:
-    ds.b    2                 ; sustain level
+    ds.w    2                 ; 'sustain' level
 ldrel:
-    ds.b    2                 ; release times
-ldmod:
-    ds.b    2                 ; mod position
+    ds.w    2                 ; release rate
 ldparms:
 ldenv:
-    ds.b    2                 ; envelope states (voice 0)
-    ds.b    2                 ; envelope states (voice 1)
+    ds.w    2                 ; envelope states (voice 0)
+    ds.w    2                 ; envelope states (voice 1)
 ldlvl:
-    ds.b    2                 ; current levels (voice 0)
-    ds.b    2                 ; current levels (voice 1)
+    ds.w    2                 ; level (voice 0)
+    ds.w    2                 ; level (voice 1)
+ldend:
+    dc.w    0
 ldsize      equ  (*-ldstate)
 
 ;-----ldstate addressing---
@@ -742,12 +757,12 @@ LDN         equ   (ldnote-ldstate)
 LDC         equ   (ldvoice-ldstate)
 LDT         equ   (ldtrig-ldstate)
 LDO         equ   (ldoct-ldstate)
+LDI         equ   (ldinit-ldstate)
 LDV         equ   (ldvol-ldstate)
 LDA         equ   (ldatt-ldstate)
 LDD         equ   (lddec-ldstate)
 LDS         equ   (ldsus-ldstate)
 LDR         equ   (ldrel-ldstate)
-LDM         equ   (ldmod-ldstate)
 LDE         equ   (ldenv-ldparms)
 LDL         equ   (ldlvl-ldparms)
 
@@ -1091,8 +1106,8 @@ findmatch:
     bset    #F_MATCH0,flags
     bset    #F_MATCH,flags
     bset    #F_PLAY,flags2
-    move.b  d5,0(a5) 
-    move.b  #1,0(a6)            ; set note
+    move.w  d5,0(a5)            ; set note
+    bset    #0,0(a6)            ; set trigger
 .next:
     move.w  #15,d5              ; down counter
     move.w  #16,d6              ; up counter 
@@ -1115,8 +1130,8 @@ findmatch:
     bset    #F_MATCH1,flags
     bset    #F_MATCH,flags
     bset    #F_PLAY,flags2
-    move.b  #1,1(a6) 
-    move.b  d5,1(a5)            ; set note
+    move.w  d5,2(a5)            ; set note
+    bset    #0,2(a6)            ; set trigger
 .done:
     rts
 
@@ -1126,11 +1141,6 @@ findmatch:
 ; preserves d0,d1
     CNOP    0,4
 drawpat:
-   move.l  #1,d5
-   lsl.l   d0,d5
-   move.l  mall1,d6
-   or.l    d5,d6
-   move.l  d6,mall1
     move.w  d0,d5
     move.w  d1,d6
     lea     (a1,d0.w),a2      ; dest pointer
@@ -1466,6 +1476,58 @@ initwav:
     jsr     wavint
     rts 
 
+;-----doenv()----------------
+; update all envelopes.
+    CNOP    0,4
+doenv:
+    move.l  #_AUD0LC,a3       ; audio base
+    lea     ldstate,a2        ; param base
+    lea     ldparms,a1        ; envelope/level  
+    move.w  #3,d6             ; loop counter
+.loop:
+    move.w  LDE(a1),d4        ; env state
+    move.w  LDL(a1),d3        ; level
+    move.w  d4,d1
+    cmp.w   #0,d4
+    beq     .end
+    cmp.w   #E_ATT,d4
+    bne     .dec
+    add.w   LDA(a2),d3
+    cmp.w   LDV(a2),d3
+    blt     .dec
+    move.w  LDV(a2),d3
+    move.w  #E_DEC,d1
+.dec:
+    cmp.w   #E_DEC,d4
+    bne     .sus
+    sub.w   LDD(a2),d3
+    cmp.w   LDS(a2),d3
+    bgt     .sus
+    move.w  LDS(a2),d3
+    move.w  #E_REL,d1
+.sus:
+    cmp.w   #E_REL,d4
+    bne     .end
+    sub.w   LDR(a2),d3
+    cmp.w   #0,d3
+    bgt     .end
+    clr.w   d3
+    clr.w   d1
+.end:
+    move.w  d3,8(a3)          ; set level
+    move.w  d3,LDL(a1)        ; new level
+    move.w  d1,LDE(a1)        ; new state
+.done:
+    add.l   #2,a1             ; next channel
+    add.l   #AUDOFFSET,a3     ; next channel
+    move.w  d6,d2
+    and.w   #1,d2
+    bne     .next
+    add.l   #2,a2             ; next voice
+.next:
+    dbra    d6,.loop
+    rts
+
 ;-----playlead()-------------
 ; trigger lead note(s).
     CNOP    0,4
@@ -1474,43 +1536,39 @@ playlead:
     lea     ldstate,a5        ; param base
     lea     scale,a4          ; scale data
     lea     ldenv,a3          ; envelope state
-    lea     ldlvl,a2          ; current level
+    lea     scoct,a2
+    lea     ldlvl,a1
     move.l  #wav0,d1
-    lea     scoct,a0
-    clr.w   d2
-    clr.w   d3  
-    clr.w   d5
     move.w  #1,d6             ; loop counter
 .loop:
-    cmp.b   #0,LDT(a5)        ; check trigger
+    btst    #0,LDT(a5)        ; check trigger
     beq     .next             ; skip if none
-    move.b  LDN(a5),d5        ; scale note
+    move.w  LDN(a5),d5        ; scale note
     lsl.w   #1,d5             ; to word offset
     move.w  (a4,d5.w),d4      ; period value
-    move.b  LDO(a5),d2        ; get octave
+    move.w  LDO(a5),d2        ; get octave
     lsr.w   d2,d4             ; adjust period
-    move.w  (a0,d5.w),d0      ; get wavetable
-    lsl.w   #TABSIZELOG,d0    ; to wavetable offset
+    move.w  (a2,d5.w),d0      ; get wavetable
+    lsl.w   #TABSIZELOG,d0    ; wavetable offset
     ext.l   d0
     add.l   d1,d0
-    move.l  d0,(a6)           ; set wave table
-;   move.b  LDC(a5),d3        ; get voice
-;   bset    #E_DEC,(a3,d3.w)  ; set env state
-    move.b  LDV(a5),d2        ; load volume
-;   move.b  d2,(a2,d3.w)      ; set volume
-;   mulu.w  #AUDOFFSET,d3     ; get channel offset
-    clr.w   d3
-    move.w  d4,6(a6,d3.w)     ; period
-    move.w  d2,8(a6,d3.w)     ; level
-    eor.b   #1,LDC(a5)        ; toggle voice
-    clr.b   LDT(a5)           ; clear trigger
+    move.l  d0,(a6)           ; set pointer
+    move.w  LDC(a5),d3        ; get voice
+  move.w #1,d3
+    lsl.w   #1,d3             ; ldparms offset
+    move.w  LDI(a5),(a1,d3.w) ; set level
+    move.w  #E_ATT,(a3,d3.w)  ; set env state
+    mulu.w  #AUDOFFSET/2,d3   ; get channel offset
+    move.w  d4,6(a6,d3.w)     ; set period
+    eor.w   #1,LDC(a5)        ; toggle voice
+    bclr    #0,LDT(a5)        ; clear trigger
 .next:
     add.l   #AUDOFFSET*2,a6   ; next channel set
-    add.l   #1,a5             ; next channel
-    add.l   #2,a3             ; ""
-    add.l   #2,a2             ; ""
+    add.l   #2,a5             ; next channel
+    add.l   #4,a3             ; ""
+    add.l   #4,a1
     add.l   #wavsize,d1       ; ""
-    add.l   #sclen*2,a0       ; ""
+    add.l   #sclen*2,a2       ; ""
     dbra    d6,.loop
     rts
 
