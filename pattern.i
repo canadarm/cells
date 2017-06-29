@@ -9,7 +9,7 @@ pattern:
 rulesl      equ   1   ; shift for rule index
 rules:
     dc.b    109,0 
-    dc.b    30,0
+    dc.b    32,0
     dc.b    150,0
     dc.b    110,0
     dc.b    161,0
@@ -39,14 +39,14 @@ p109:
     dc.b    %11101110
     dc.b    0,0,0,0
 p32:
+    dc.b    %10100000
+    dc.b    %01000000
     dc.b    %00000000
-    dc.b    %00100000
-    dc.b    %01010000
     dc.b    %00000000
     dc.b    0,0,0,0
-    dc.b    %00100000
-    dc.b    %01010000
     dc.b    %10101000
+    dc.b    %01010000
+    dc.b    %00100000
     dc.b    %00000000
     dc.b    0,0,0,0
 p150:
@@ -252,7 +252,7 @@ m109:
     dc.w    mask45 
     dc.w    mask47  
 m32:
-    dc.w    mask45 
+    dc.w    mask33 
     dc.w    mask45 
 m150:
     dc.w    mask150 

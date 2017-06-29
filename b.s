@@ -80,7 +80,9 @@ F_ENV       equ 6               ; update envelopes
 F_MOD       equ 7               ; modulate
 ;------flag2 bits----------
 F_PLAY      equ 0               ; play next interval
-F_ERR       equ 1
+F_RAND      equ 1               ; randomize next state
+F_ERR       equ 7
+
 
 ;-----sequencer defs-------
 E_ATT       equ 1
@@ -96,6 +98,7 @@ E_REL       equ 3
 period      equ 14800           ; timer interrupt period
 kbhs        equ 120             ; keyboard handshake duration - 02 clocks
 countmod    equ 64              ; 16th notes between mode transition
+countz      equ 4               ; dead states before randomize
 
 ;-----color defs------------
 ctablog     equ   3
@@ -364,6 +367,11 @@ init:
     bclr    #F_PLAY,flags2
     jsr     playlead
 .notrig:
+    btst    #F_RAND,flags2
+    beq     .norand
+    bclr    #F_RAND,flags2
+    jsr     randstate
+.norand:
     btst    #F_ERR,flags2
     beq     .endmain
     move.w  #$7FFF,_INTENA      ; turn off interrupts
@@ -463,7 +471,7 @@ keyint:
     move.l  #CIAB,a1            ; CIAB base
     move.b  CIAPRB(a0),d0       ; load parallel data
     move.b  d0,(a2,d6.w)        ; store state
-    move.w  #$8010,CIAICR(a0)   ; set FLAG bit (handshake)
+    move.w  #$90,CIAICR(a0)     ; set FLAG bit (handshake)
     add.w   #1,d6               ; increment position
     and.w   #$1F,d6             ; mod 4*window size
     and.w   #$3,d6              ; test for full line
@@ -706,6 +714,8 @@ ptmp:
     CNOP    0,4
 rule:
     dc.w    0
+zeros:
+    dc.b    0
     ENDC 
     CNOP    0,4
 state:
@@ -1330,10 +1340,12 @@ pack:
     move.w  #ncells-1,d6      ; loop counter
     move.l  #$80000000,d1     ; bit mask
     clr.l   d2                ; bit buffer
+    clr.b   d3                ; set bit counter
 .loop:
     cmp.b   #0,(a6,d0.w)      ; test byte
     beq.b   .next
     or.l    d1,d2             ; set bit
+    move.b  #$FF,d3           ; set flag
 .next:
     lsr.l   #1,d1             ; advance mask
     add.w   #1,d0             ; advance position
@@ -1345,6 +1357,13 @@ pack:
     and.w   #$1F,d0           ; mod 4*window size
     move.w  d0,bpos
     bset    #F_DATA,flags     ; set data flag
+    add.b   #1,d3             ; count zeros
+    add.b   d3,zeros
+    cmp.b   #countz,zeros     ; test for dead state
+    blt     .norand
+    clr.b   zeros
+    bset    #F_RAND,flags2
+.norand:
     rts
     
     IFD TEST
@@ -1575,6 +1594,7 @@ playlead:
     IFD TEST
 ;-----seed()---------------
 ; Seed the prng
+; uses d0-d2
     CNOP      0,4
 seed:
     move.l    #$deadbeef,d0
@@ -1596,6 +1616,25 @@ prng:
     rts
 rng:
     ds.l      2 
+
+;-----randstate()-----------
+; randomize the current state
+; uses d0,d4-d6,a1
+randstate:
+    lea     state,a1
+    move.w  pos,d4              ; get current position
+    lsl.w   #stwidthlog,d4      ; ..
+    move.w  #ncells-1,d5        ; loop counter
+.randloop:
+    jsr     prng
+    move.b  d0,d6
+    lsl.b   #3,d6
+    or.b    d0,d6
+    and.b   #1,d6
+    move.b  d6,(a1,d4.w)
+    add.w   #1,d4
+    dbra    d5,.randloop
+    rts
     ENDC
 
 ;------------------------------------------------------------------------------

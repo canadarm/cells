@@ -54,7 +54,9 @@ F_MOD       equ 4               ; modulate sequence
 F_TRANSP    equ 5               ; transpose root
 F_CLOCK16   equ 6               ; 16 tick event
 F_CLOCK8    equ 7               ; 8 tick event
-F_ERR       equ 15              ; error exit
+;-----flag2 bits-----------
+F_RAND      equ 0               ; randomize next
+F_ERR       equ 7               ; error exit
 
 ;-----buffer defs----------
 bsize       equ stwidth*csize           ; render buffer size
@@ -68,6 +70,7 @@ bgmax       equ $0333
 
 ;-----sequence defs--------
 countmod    equ 64                      ; 16th notes between mode transition
+countz      equ 8                       ; dead states before randomize
 F_DESC      equ 0                       ; descending flag
 F_PERF      equ 1                       ; move to perfect flag
 
@@ -188,20 +191,22 @@ init:
     move.b  #1,SQG(a0)          ; gate
     move.b  #0,SQM(a0)          ; modulation
     move.b  #seqlen,SQLN(a0)    ; length
-    move.b  #64,SQV(a0)         ; volume
-    move.b  #9,SQD(a0)          ; decay
+    move.b  #90,SQV(a0)         ; volume
+    move.b  #8,SQD(a0)          ; decay
     move.b  d4,d3
     and.b   #1,d3
     add.b   #1,d3
     move.b  d3,SQO(a0)          ; octave
     addq    #1,a0
     dbra    d4,.initseq
-    clr.w   d0                  ; init sequence notes
-.mkseqs:
+    move.w  #0,d0
     jsr     mkseq
-    add.w   #1,d0
-    cmp.w   #ncols,d0
-    blt     .mkseqs
+    move.w  #1,d0
+    jsr     mkseq
+    move.w  #2,d0
+    jsr     mkseq
+    move.w  #3,d0
+    jsr     mkseq
 
 ;-----init metrics---------
     lea     oncount,a0
@@ -260,7 +265,7 @@ init:
     waitr   a1,d0,d1,d2
     bset.b  #0,CIACRB(a6)       ; start CIA-B TB
     move.w  _COPJMP1,d0         ; start copper
-    move.w  #$8000,_ADKCON      ; clear mod bits
+    move.w  #$0088,_ADKCON      ; clear mod bits
     move.w  #$7FFF,_DMACON      
     move.w  #DMAF_ALLA,_DMACON  ; start DMA
     ENDC
@@ -273,7 +278,7 @@ init:
 .nokey:
     btst    #F_UPDATE,flags
     beq     .noupdate
-;   jsr     pack
+    jsr     pack
 ;   jsr     writepp
     jsr     playseq
     jsr     update
@@ -288,7 +293,12 @@ init:
     beq     .noclock8
     jsr     settrig
     jsr     setseq
-.noclock8
+.noclock8:
+    btst    #F_RAND,flags2
+    beq     .norand
+    bclr    #F_RAND,flags2
+    jsr     randstate
+.norand:
 .endmain:
     btst    #6,$bfe001
     bne     .mainloop
@@ -363,9 +373,10 @@ init:
 .xx:
     movem.l (sp)+,d1-d6/a0-a6
     move.w  #1,d0
-    move.l  seqgate,d0
-    move.l  xoncount,d1
-    move.w  pattern,d2
+    move.l  seqgate,d1
+    move.l  seqtrig+seqlen*2,d2
+    move.l  seq+seqlen*4,d3
+    move.l  seq+seqlen*4+4,d4
     rts
 
 ;------interrupts----------
@@ -530,6 +541,8 @@ coprpos:
     dc.w    0                   ; copper offset  
 flags:
     dc.w    0
+flags2:
+    dc.w    0
 rule:
     dc.b    0
 ruleb:
@@ -548,6 +561,9 @@ key:
     dc.w    0                   ; last keypress
 popcnt:
     dc.b    0,1,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 1,2  
+    EVEN
+popcntn:
+    dc.b    2,1,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 1,0  
     EVEN
 cpos:
     dc.b    0                   ; scroll position mod 8
@@ -585,6 +601,8 @@ xhbuf:
     ds.b    ncells
 packed:
     dc.l    0                   ; packed state for transfer
+zeros:
+    dc.b    0
 
 ;-----sequencer data--------
     CNOP    0,4
@@ -661,6 +679,8 @@ settrig:
     lea     seqtrig,a0      ; trigger list
     lea     maj,a1          ; column counts
     move.w  #ncells-1,d6    ; loop counter
+    cmp.b   #0,negateb
+    bne     .negloop
 .trigloop:
     clr.b   d1              ; zero trigger
     move.b  (a1)+,d0        ; count
@@ -671,6 +691,17 @@ settrig:
     move.b  d1,(a0)+        ; store trigger value
     dbra    d6,.trigloop
     rts
+.negloop:
+    clr.b   d1              ; zero trigger
+    move.b  (a1)+,d0        ; count
+    cmp.b   #(wsize/2),d0   ; test majority
+    bge.b   .notrig2
+    add.b   #1,d1
+.notrig2:
+    move.b  d1,(a0)+        ; store trigger value
+    dbra    d6,.negloop
+    rts
+
 
 ;-----setseq()---------------
 ; Set sequence lengths from xoncount.
@@ -692,7 +723,7 @@ setseq:
     move.b  d0,(a2)+        ; set length
     move.b  (a1)+,d0        ; xcount
     clr.b   d1              ; gate value
-    cmp.b   #8,d0           ; check gate threshold
+    cmp.b   #4,d0           ; check gate threshold
     blt     .setgate
     add.b   #1,d1
 .setgate:
@@ -702,7 +733,7 @@ setseq:
 
 ;-----update()-------------
 ; Update sequence metrics and history.
-; uses a0-a4,d0-d6
+; uses a0-a5,d0-d6
     CNOP    0,4
 update:
     lea     hist,a0
@@ -722,6 +753,11 @@ update:
     lea     hist,a0
     lea     hbuf,a1
     lea     popcnt,a2
+    lea     popcnt,a5
+    cmp.b   #0,negateb 
+    beq     .pos
+    lea     popcntn,a5        ; use negated popcnt
+.pos:
     lea     oncount,a3
     lea     xhist,a4
     move.w  #ncols-1,d6       ; outer loop over columns
@@ -742,18 +778,22 @@ update:
     sub.b   d3,d2             ; total change
     add.b   d2,ncols(a3)      ; store new col value
     move.l  (a0,d0.w),d1      ; history word
-    move.b  (a2,d1.w),d2      ; popcnt hist high
+    move.b  (a5,d1.w),d2      ; popcnt hist high
     swap    d1
-    move.b  (a2,d1.w),d3      ; popcnt hist low
+    move.b  (a5,d1.w),d3      ; popcnt hist low
     add.b   d2,d3             ; popcnt hist
     move.l  (a1)+,d1          ; buf word
     move.l  d1,(a0,d0.w)      ; save in history
-    move.b  (a2,d1.w),d2      ; popcnt buf high
+    move.b  (a5,d1.w),d2      ; popcnt buf high
     swap    d1
-    move.b  (a2,d1.w),d4      ; popcnt buf low
+    move.b  (a5,d1.w),d4      ; popcnt buf low
     add.b   d4,d2             ; popcnt buf
     sub.b   d3,d2             ; total change
     add.b   d2,(a3)           ; store new col value
+    cmp.b   #0,(a3)           ; clamp
+    bge     .noclamp
+    clr.b   (a3)
+.noclamp:
     add.w   #4,d0             ; advance history word
     dbra    d5,.inner
     addq    #1,a3             ; advance column
@@ -877,7 +917,7 @@ copystate:
 ;-----mkseq(d0)------------
 ; write period values into seq for channel
 ; index in d0.
-; uses a2-a6,d1-d5.
+; uses a2-a6,d0-d6.
     CNOP    0,4
 mkseq:
     lea     modes,a6          ; get mode base
@@ -885,8 +925,8 @@ mkseq:
     lea     seq,a4            ; seq base
     lea     seqoct,a3         ; octaves
     lea     seqmod,a2         ; modes
-    clr.w   d2
     move.b  (a2,d0.w),d2      ; get mode position
+    ext.w   d2
     lsl.w   #modelenlog,d2    ; get mode index
     move.b  root,d6           ; get root note
     move.b  (a3,d0.w),d1      ; load octave
@@ -925,9 +965,9 @@ playseq:
     cmp.b   #0,SQG(a3)        ; gate
     beq     .notrig 
     move.b  SQP(a3),d5        ; position
-    clr.w   d4
     move.b  d5,d4             ; convert to word offset
-    lsl.b   #1,d4
+    ext.w   d4
+    lsl.w   #1,d4
     move.w  (a5,d4),d3        ; period
     add.b   #1,d5             ; increment position
     cmp.b   SQLN(a3),d5       ; check against length
@@ -941,7 +981,7 @@ playseq:
     move.b  SQV(a3),d2
     move.b  d2,SQL(a3)        ; level
     move.w  #TABSIZE,4(a4)    ; length
-    move.l  #wav32,0(a4)      ; pointer
+    move.l  #wav32,0(a4)      ; pointer FIXME: do in advance or modulate etc
     move.w  d2,8(a4)          ; volume
     move.w  d3,6(a4)          ; period
 .notrig:
@@ -1093,23 +1133,33 @@ colormod:
 
 ;-----pack()---------------
 ; pack state at d0 into packed as dword.
-; uses d0-d2,d6,a6
+; uses d0-d3,d6,a6
     CNOP    0,4
 pack:
     lea     state,a6          ; compute state address
+    move.w  pos,d0            ; get state position
     lsl.w   #stwidthlog,d0    
     move.w  #ncells-1,d6      ; loop counter
     move.l  #$80000000,d1     ; bit mask
     clr.l   d2                ; bit buffer
+    clr.b   d3                ; set bit counter
 .loop:
     cmp.b   #0,(a6,d0.w)      ; test byte
     beq.b   .next
     or.l    d1,d2             ; set bit
+    move.b  #$FF,d3           ; set flag
 .next:
     lsr.l   #1,d1             ; advance mask
     add.w   #1,d0             ; advance position
     dbra    d6,.loop
     move.l  d2,packed         ; store bits
+    add.b   #1,d3             ; count zeros
+    add.b   d3,zeros
+    cmp.b   #countz,zeros     ; test for dead state
+    blt     .norand
+    clr.b   zeros
+    bset    #F_RAND,flags2
+.norand:
     rts
 
 ;-----writepp()-----------------
@@ -1181,6 +1231,25 @@ prng:
     rts
 rng:
     ds.l      2 
+
+;-----randstate()-----------
+; randomize the current state
+; uses d0,d4-d6,a1
+randstate:
+    lea     state,a1
+    move.w  pos,d4              ; get current position
+    lsl.w   #stwidthlog,d4      ; ..
+    move.w  #ncells-1,d5        ; loop counter
+.randloop:
+    jsr     prng
+    move.b  d0,d6
+    lsr.b   #2,d6
+    and.b   d0,d6
+    and.b   #1,d6
+    move.b  d6,(a1,d4.w)
+    add.w   #1,d4
+    dbra    d5,.randloop
+    rts
 
 ;------------------------------------------------------------------------------
     end
