@@ -2,6 +2,11 @@
     INCDIR  "git/"
     INCLUDE "wmacro.i"
     INCLUDE "hwdefs.i"
+    INCDIR  "Include/"
+;   INCLUDE "exec/exec_lib.i"
+;   INCLUDE "exec/nodes.i"
+;   INCLUDE "exec/interrupts.i"
+;   INCLUDE "exec/inputevent.i"
 
 ;-----macro defs-----------
 ;DEBUG       SET 1

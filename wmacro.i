@@ -49,6 +49,33 @@ waitbltr    MACRO
     ENDC
     ENDM
 
+; set SPMODE bit to acknowledge
+; data read. registers holds CIA-A base, CIA-B base.
+; alternative method just burns 3 cycles.
+ppack       MACRO
+    bset    #0,CIAPRA(\2) ; set BUSY
+.waitp\@:
+;   bset    #6,CIACRA(\1)
+;   tst.b   CIAPRA(\1)
+    btst    #3,CIAPRA(\2) ; wait for SEL
+    bne     .waitp\@
+    bclr    #0,CIAPRA(\2) ; clear BUSY
+    ENDM
+
+; poll FLAG interrupt bit to acknowledge
+; read of sent data. registers holds CIA-A base, CIA-B base
+; alternative method just burns 3 cycles.
+ppwait      MACRO
+    bclr    #2,CIAPRA(\2) ; clear SEL
+.waitp\@:
+;   btst    #4,CIAICR(\1)
+;   beq     .waitp\@
+;   tst.b   CIAPRA(\2)
+    btst    #0,CIAPRA(\2) ; wait for BUSY
+    bne     .waitp\@
+    bset    #2,CIAPRA(\2) ; set SEL
+    ENDM
+
 ;-----setblt(a)------------
 ; uses given ar
 ; uses/sets bltset variable
