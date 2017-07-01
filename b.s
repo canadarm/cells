@@ -2,9 +2,7 @@
     INCDIR  "git/"
     INCLUDE "wmacro.i"
     INCLUDE "hwdefs.i"
-    INCDIR  "Include/"
-    INCLUDE "exec/exec_lib.i"
-    INCLUDE "exec/nodes.i"
+
 ;-----macro defs-----------
 TEST        SET 1
 ;DEBUG       SET 1
@@ -64,8 +62,7 @@ celloff     equ (bplwidth-stwidth)/2    ; cell offset in bytes
 celloffw    equ (bplwidthw-stwidthw)/2  ; cell offset in words
 tsizelog    equ 2
 tsize       equ (1<<tsizelog)
-tsizew      equ (tsize/2)
-wavsizelog  equ (tsizelog+7)
+wavsizelog  equ (tsizelog+6)    ; 6 = tabsizelog
 wavsize     equ (1<<wavsizelog)
 wavsizew    equ (wavsize/2)
 
@@ -79,9 +76,12 @@ F_MATCH     equ 5               ; match on either
 F_ENV       equ 6               ; update envelopes
 F_MOD       equ 7               ; modulate
 ;------flag2 bits----------
-F_PLAY      equ 0               ; play next interval
-F_RAND      equ 1               ; randomize next state
-F_ERR       equ 7
+G_PLAY      equ 0               ; play next interval
+G_RAND      equ 1               ; randomize next state
+G_PAT       equ 2               ; accept pattern
+G_MODE      equ 3               ; accept mode
+G_LDM       equ 4               ; modulate lead
+G_ERR       equ 7
 
 
 ;-----sequencer defs-------
@@ -223,22 +223,24 @@ init:
 ;-----init wavetables------
     jsr     initwav
     move.l  #_AUD0LC,a6         ; audio base
-    move.l  #wav0,d6
+    move.l  #wavm0,d6
     move.l  d6,0(a6)            ; set first channels
     move.w  #TABSIZEW,4(a6)
     clr.w   6(a6)
     clr.w   8(a6) 
+    move.l  #wavm1,d6          
     add.l   #AUDOFFSET,a6
     move.l  d6,0(a6)
     move.w  #TABSIZEW,4(a6)
     clr.w   6(a6)
     clr.w   8(a6)
-    move.l  #wav1,d6          
+    move.l  #wavm1,d6          
     add.l   #AUDOFFSET,a6       ; set second channels
     move.l  d6,0(a6)
     move.w  #TABSIZEW,4(a6)
     clr.w   6(a6)
     clr.w   8(a6)
+    move.l  #wavm0,d6          
     add.l   #AUDOFFSET,a6
     move.l  d6,0(a6)
     move.w  #TABSIZEW,4(a6)
@@ -252,21 +254,23 @@ init:
     clr.l   (a6)+
     dbra    d6,.initld
     lea     ldstate,a6
-    move.w  #110,LDI(a6)
-    move.w  #100,LDV(a6)
-    move.w  #0,LDA(a6)
-    move.w  #24,LDD(a6)
-    move.w  #50,LDS(a6)
+    move.w  #80,LDI(a6)
+    move.w  #90,LDV(a6)
+    move.w  #12,LDA(a6)
+    move.w  #28,LDD(a6)
+    move.w  #24,LDS(a6)
     move.w  #1,LDR(a6)
     move.w  #1,LDO(a6)
+    move.w  #4,MDR(a6)
     add.l   #2,a6
-    move.w  #60,LDI(a6)
-    move.w  #100,LDV(a6)
-    move.w  #12,LDA(a6)
-    move.w  #8,LDD(a6)
+    move.w  #30,LDI(a6)
+    move.w  #90,LDV(a6)
+    move.w  #16,LDA(a6)
+    move.w  #3,LDD(a6)
     move.w  #60,LDS(a6)
-    move.w  #1,LDR(a6)
+    move.w  #6,LDR(a6)
     move.w  #0,LDO(a6)
+    move.w  #1,MDR(a6)
     move.b  #0,mode
     lea     ldlvl,a6
     move.w  #120,(a6)+
@@ -324,27 +328,39 @@ init:
     move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
     move.b  #$7F,CIAICR(a6)     ; clear CIA-B interrupts
     move.b  #$18,CIACRA(a5)     ; CIA-A TA: one-shot, KB input mode
+    IFND TEST
+    move.b  #$00,CIADDRB(a5)    ; CIA-A DDRB: ppt input
+    or.b    #$01,CIADDRA(a6)    ; CIA-B DDRA: set BUSY to output
+    and.b   #$FB,CIADDRA(a6)    ; CIA-B DDRA: set SEL to input
+    ENDC
+    IFD TEST
     and.b   #$80,CIACRB(a6)     ; CIA-B TB: continuous, pulse, PB6OFF
     or.b    #$10,CIACRB(a6)
     move.b  #(period&$FF),CIATBLO(a6) ; set CIA-B timer B period 
     move.b  #(period>>8),CIATBHI(a6)  ; ..for timer interrupt
+    ENDC
     move.b  #(kbhs&$FF),CIATBLO(a5)   ; set CIA-A timer B period
     move.b  #(kbhs>>8),CIATBHI(a5)    ; .. for kb handshake
     move.l  #keyint,$68.w       ; install lvl2 handler (cia-a)
     move.l  #vblankint,$6C.w    ; install lvl3 handler
+    IFD TEST
     move.l  #timerint,$78.w     ; install lvl6 handler (cia-b)
-    move.b  #$88,CIAICR(a5)     ; enable CIA-A FLG/SP interrupt (keyboard) (was 9 for FLG)
+    move.b  #$88,CIAICR(a5)     ; enable CIA-A SP interrupt (keyboard)
     move.b  #$82,CIAICR(a6)     ; enable CIA-B TB interrupt
     move.w  #$E028,_INTENA      ; enable lvl2/3/6
-    waitr   a1,d0,d1,d2
     bset.b  #0,CIACRB(a6)       ; start CIA-B TB
+    ENDC
+    IFND TEST
+    move.b  #$98,CIAICR(a5)     ; enable CIA-A FLG/SP interrupt (keyboard)
+    move.w  #$C028,_INTENA      ; enable lvl2/3
+    ENDC
+    waitr   a1,d0,d1,d2
     move.w  _COPJMP1,d0         ; start copper
     move.w  #$0088,_ADKCON      ; clear mod bits
     move.w  #$7FFF,_DMACON      
-    move.w  #DMAF_ALLA,_DMACON  ; start DMA
+    move.w  #$83EF,_DMACON  ; start DMA
     ENDC
 
-    clr.w   flags
 ;-----frame loop start-------
 .mainloop:
     btst    #F_KEY,flags
@@ -360,6 +376,12 @@ init:
     btst    #F_DATA,flags
     beq     .nodata
     bclr    #F_DATA,flags
+    IFND TEST
+    move.b  ppat,d0
+    jsr     setpat
+    move.b  pmod,d0
+    jsr     modulate
+    ENDC
     jsr     match
 .nodata:
     btst    #F_ENV,flags
@@ -367,17 +389,22 @@ init:
     bclr    #F_ENV,flags
     jsr     doenv
 .noenv:
-    btst    #F_PLAY,flags2
+    btst    #G_LDM,flags2
+    beq     .noldm
+    bclr    #G_LDM,flags2
+    jsr     modlead
+.noldm
+    btst    #G_PLAY,flags2
     beq     .notrig
-    bclr    #F_PLAY,flags2
+    bclr    #G_PLAY,flags2
     jsr     playlead
 .notrig:
-    btst    #F_RAND,flags2
+    btst    #G_RAND,flags2
     beq     .norand
-    bclr    #F_RAND,flags2
+    bclr    #G_RAND,flags2
     jsr     randstate
 .norand:
-    btst    #F_ERR,flags2
+    btst    #G_ERR,flags2
     beq     .endmain
     move.w  #$7FFF,_INTENA      ; turn off interrupts
 .errlp
@@ -465,6 +492,7 @@ init:
 .return:
 .xx:
     movem.l (sp)+,d1-d7/a0-a6
+    move.w  dbg,d0
     rts
 
 ;------interrupts----------
@@ -474,25 +502,10 @@ keyint:
     btst    #3,d0               ; PORTS handler
     beq     .exit
     move.l  #CIAA,a0            ; CIA-A base
-    btst    #3,CIAICR(a0)       ; test SP bit (???)
+    btst    #4,CIAICR(a0)       ; test FLAG bit (ppt)
+    bne     .ppt
+    btst    #3,CIAICR(a0)       ; test SP bit (kb)
     beq     .exit
-    IFND TEST
-    lea     buf,a2
-    move.w  bpos,d6
-    move.l  #CIAB,a1            ; CIAB base
-    move.b  CIAPRB(a0),d0       ; load parallel data
-    move.b  d0,(a2,d6.w)        ; store state
-    move.w  #$90,CIAICR(a0)     ; set FLAG bit (handshake)
-    add.w   #1,d6               ; increment position
-    and.w   #$1F,d6             ; mod 4*window size
-    and.w   #$3,d6              ; test for full line
-    cmp.b   #0,d6
-    bne.b   .notline
-    bset    #F_DATA,flags       ; set data bit
-.notline:
-    move.w  d6,bpos             ; update position
-    ENDC
-    IFD TEST
     move.b  CIASDR(a0),d6       ; load serial data
     or.b    #$01,CIACRB(a0)     ; start CIA-A TB (one shot)
     or.b    #$40,CIACRA(a0)     ; set output mode (handshake)
@@ -507,7 +520,39 @@ keyint:
     and.b   CIAICR(a0),d6
     beq     .handshake
     and.b   #$BF,CIACRA(a0)     ; set input mode
-    ENDC
+    bra     .exit
+.ppt:
+    lea     buf,a2
+    move.w  bpos,d6
+    move.l  #CIAB,a1            ; CIA-A base
+    move.b  CIAPRB(a0),d0       ; load parallel data
+    move.b  d0,(a2,d6.w)        ; store state
+    ppack   a0,a1
+    add.w   #1,d6               ; increment position
+    and.w   #$1F,d6             ; mod 4*window size
+    move.b  CIAPRB(a0),d0       ; load parallel data
+    move.b  d0,(a2,d6.w)        ; store state
+    ppack   a0,a1
+    add.w   #1,d6               ; increment position
+    and.w   #$1F,d6             ; mod 4*window size
+    move.b  CIAPRB(a0),d0       ; load parallel data
+    move.b  d0,(a2,d6.w)        ; store state
+    ppack   a0,a1
+    add.w   #1,d6               ; increment position
+    and.w   #$1F,d6             ; mod 4*window size
+    move.b  CIAPRB(a0),d0       ; load parallel data
+    move.b  d0,(a2,d6.w)        ; store state
+    ppack   a0,a1
+    add.w   #1,d6               ; increment position
+    and.w   #$1F,d6             ; mod 4*window size
+    move.b  CIAPRB(a0),d0       ; load parallel data
+    move.b  d0,ppat             ; store pattern
+    ppack   a0,a1
+    move.b  CIAPRB(a0),d0       ; load parallel data
+    move.b  d0,pmod             ; store mode
+    bset    #F_DATA,flags       ; indicate data received
+    bset    #F_STEP,flags
+    move.w  d6,bpos             ; update position
 .exit:
     move.w  #$4008,_INTREQ
     move.w  #$4008,_INTREQ
@@ -519,8 +564,8 @@ vblankint:
     move.w  _INTREQR,d0         ; check req mask
     btst    #5,d0               ; VBLANK handler
     beq     .exit
-;   jsr     doenv
     bset    #F_ENV,flags
+    bset    #G_LDM,flags2       ; request env update
     btst    #F_STEP,flags
     beq     .nostep
     bclr    #F_STEP,flags
@@ -535,11 +580,6 @@ vblankint:
     move.w  d6,copptrh
     lea     bgpl,a0             ; screen base for copy
     move.w  bplpos,d4           ; offset for copy
-;   cmp.l   #0,d4               ; clear on reset
-;   bne.b   .noclearlo
-;   lea     bgpl,a1
-;   jsr     clearpl
-.noclearlo:
     move.w  d4,d5
     add.w   #celloff,d5
     lea     (a0,d5.w),a2        ; copy address
@@ -551,11 +591,6 @@ vblankint:
     lea     bgplhi,a0           ; screen base for render
     addmod  d4,width,bplsize    ; increment
     move.w  d4,bplpos
-;   cmp.l   #0,d4               ; clear on reset
-;   bne.b   .noclearhi
-;   lea     bgplhi,a1
-;   jsr     clearpl
-.noclearhi:
     move.w  d4,d5 
     add.w   #celloff,d5
     lea     (a0,d5.w),a3        ; render address
@@ -568,32 +603,31 @@ vblankint:
     ENDC
     lea     fgpl0,a1            ; get fg pointer
     jsr     clearrow            ; clear fg row
-.nostep:
     btst    #F_MATCH,flags
     beq     .nomatch1
     bclr    #F_MATCH,flags
-    lea     fgpl0,a1            ; get fg pointer
-    add.l   #celloff,a1
+    sub.l   #patoffset,a3
     btst    #F_MATCH0,flags     ; test for match on 0
     beq     .nomatch0
     move.w  mx0,d0              ; load match index
     move.w  #0,d1               ; select pattern 0
+    lea     fgpl0,a1            ; get fg pointer
+    add.l   #celloff,a1
     jsr     drawpat             ; draw pattern 0 (fg)
-;   move.l  a2,a1
-;   jsr     drawpat             ; draw pattern 0 (copy)
-;   move.l  a3,a1
-;   jsr     drawpat             ; draw pattern 0 (bg)
+    move.l  a3,a1
+    jsr     drawpat             ; draw pattern 0 (bg)
 .nomatch0:
     btst    #F_MATCH1,flags     ; test for match on 1
     beq     .nomatch1
     move.w  mx1,d0              ; load match index
     move.w  #1,d1               ; select pattern 1
-    jsr     drawpat             ; draw pattern 1 (fg)
-;   move.l  a2,a1
-;   jsr     drawpat             ; draw pattern 1 (copy)
-;   move.l  a3,a1 
+    lea     fgpl0,a1            ; get fg pointer
+    add.l   #celloff,a1
+;   jsr     drawpat             ; draw pattern 1 (fg)
+    move.l  a3,a1
 ;   jsr     drawpat             ; draw pattern 1 (bg)
 .nomatch1: 
+.nostep:
 .exit:
     move.w  #$4020,_INTREQ      ; clear INTREQ
     move.w  #$4020,_INTREQ      ; ... twice
@@ -607,9 +641,8 @@ timerint:
     and.w   #$2000,d0
     beq     .exit
     move.l  #CIAB,a0            ; CIA-B base
-    btst    #1,CIAICR(a0)
+    btst    #1,CIAICR(a0)       ; timer interrupt
     beq     .exit
-    bset    #F_ENV,flags        ; request env update
     add.b   #1,count            ; increment count mod countmod
     cmp.b   #countmod,count     ; check for mod divider
     bne     .nomod
@@ -625,6 +658,7 @@ timerint:
     IFD TEST
     move.w  pos,drawpos         ; set draw position
     jsr     nextstate
+    bra     .exit
     ENDC
 .exit:
     move.w  #$6000,_INTREQ      ; clear INTREQ
@@ -651,6 +685,14 @@ bpos:
     dc.w    0                   ; buffer position
 pos:
     dc.w    0
+dbg:  
+    dc.w    0
+ppat:
+    dc.b    0                   ; pattern from ppt
+pmod:
+    dc.b    0                   ; mode from ppt
+audtab:
+    dc.w    0, AUDOFFSET*3, AUDOFFSET*1, AUDOFFSET*2
 
     SECTION saves,DATA
     CNOP    0,4
@@ -691,6 +733,10 @@ count: ;$2679D9
 wav0:
     ds.w    wavsizew
 wav1:
+    ds.w    wavsizew
+wavm0:
+    ds.w    wavsizew
+wavm1:
     ds.w    wavsizew
 
 ;-----cell buffers---------
@@ -770,6 +816,10 @@ ldsus:
     ds.w    2                 ; 'sustain' level
 ldrel:
     ds.w    2                 ; release rate
+ldmp:
+    ds.w    2                 ; mod position
+ldmr:
+    ds.w    2                 ; mod rate
 ldparms:
 ldenv:
     ds.w    2                 ; envelope states (voice 0)
@@ -794,6 +844,8 @@ LDS         equ   (ldsus-ldstate)
 LDR         equ   (ldrel-ldstate)
 LDE         equ   (ldenv-ldparms)
 LDL         equ   (ldlvl-ldparms)
+MDP         equ   (ldmp-ldstate)
+MDR         equ   (ldmr-ldstate)
 
 ;-----copper lists---------
     SECTION cop,DATA_C
@@ -818,9 +870,7 @@ coplist:
     SECTION planes,BSS_C
     CNOP    0,4
 bgpl:
-    ds.b    bplsize-width*pwidth
-bgplhi0:
-    ds.b    width*pwidth
+    ds.b    bplsize
 bgplhi:
     ds.b    bplsize
     CNOP    0,4
@@ -828,6 +878,7 @@ fgpl:
     ds.b    bplsize-width*(pwidth-2)
 fgpl0:
     ds.b    width*(pwidth+2)
+patoffset   equ width*(pwidth-2)
     IFD TEST
     CNOP    0,4
 cbuf:
@@ -962,7 +1013,7 @@ loadscales:
     lea     (a6,d5.w),a3      ; scale base
     move.b  (a3)+,d4          ; get scale length
     ext.w   d4
-    move.w  #16,d3
+    move.w  #8,d3
     sub.w   d4,d3             ; get scale offset to centre
     move.w  #sclen-1,d6       ; loop counter
 .copy:
@@ -974,7 +1025,7 @@ loadscales:
     move.w  d0,(a1)+          ; store octave
     add.w   #1,d3             ; increment mod length
     cmp.w   d4,d3
-    blt     .nowrap
+    bne     .nowrap
     clr.w   d3
     add.w   #1,d0             ; next wave table
     and.w   #$3,d0
@@ -983,26 +1034,26 @@ loadscales:
     rts
 
 ;-----modulate()---------
-; modulate current key
-; TODO: rewrite to take mode index from PPT
+; set current key to value in d0.
     CNOP    0,4
 modulate:
-    move.b  mode,d6           ; current mode
-    add.b   #1,d6
-    cmp.b   #seqcnt,d6
+    cmp.b   mode,d0
+    beq     .end
+    cmp.b   #seqcnt,d0
     blt     .nowrap
-    clr.b   d6
-.nowrap
-    move.b  d6,mode
+    clr.b   d0
+.nowrap:
+    move.b  d0,mode
     jsr     loadscales
+.end:
     rts
     
-;-----setpat(d0)-----------
+;-----incpat(d0)-----------
 ; adjust the current pattern
 ; by the amount in d0. write the pattern
 ; data to the sprite areas.
     CNOP    0,4
-setpat:
+incpat:
     move.w  pattern,d1
     add.b   d0,d1 
     cmp.w   #0,d1
@@ -1015,6 +1066,26 @@ setpat:
 .inrange:
     move.w  d1,pattern
     jsr     loadpat
+    rts 
+
+;-----setpat()----------------
+; sets the pattern to the value in d0
+    CNOP    0,4
+setpat:
+    ext.w   d0
+    cmp.w   pattern,d0
+    beq     .end
+    cmp.w   #0,d0
+    bge     .pos
+    add.w   #numpat,d0
+.pos: 
+    cmp.w   #numpat,d0
+    blt     .inrange
+    sub.w   #numpat,d0
+.inrange:
+    move.w  d0,pattern
+    jsr     loadpat
+.end:
     rts 
 
 ;-----matchdown()-------------
@@ -1134,7 +1205,7 @@ findmatch:
     move.w  d5,mx0
     bset    #F_MATCH0,flags
     bset    #F_MATCH,flags
-    bset    #F_PLAY,flags2
+    bset    #G_PLAY,flags2
     move.w  d5,0(a5)            ; set note
     bset    #0,0(a6)            ; set trigger
 .next:
@@ -1158,7 +1229,7 @@ findmatch:
     move.w  d5,mx1
     bset    #F_MATCH1,flags
     bset    #F_MATCH,flags
-    bset    #F_PLAY,flags2
+    bset    #G_PLAY,flags2
     move.w  d5,2(a5)            ; set note
     bset    #0,2(a6)            ; set trigger
 .done:
@@ -1172,9 +1243,9 @@ findmatch:
 drawpat:
     move.w  d0,d5
     move.w  d1,d6
-    lea     (a1,d0.w),a2      ; dest pointer
+    lea     (a1,d0.w),a1      ; dest pointer
     move.w  #0,d3             ; shift value
-    move.w  a2,d4
+    move.w  a1,d4
     and.w   #1,d4             ; test for alignment
     cmp.w   #0,d4
     beq     .aligned
@@ -1186,8 +1257,8 @@ drawpat:
     lea     spr1,a0
 .idx0:
     waitblt
-    move.l  a2,_BLTDPT        ; D address
-    move.l  a2,_BLTCPT        ; C address
+    move.l  a1,_BLTDPT        ; D address
+    move.l  a1,_BLTCPT        ; C address
     move.l  a0,_BLTAPT        ; source pointer
     clr.w   _BLTAMOD          ; set A modulo
     move.w  #coff*2,_BLTDMOD  ; set D modulo
@@ -1245,7 +1316,7 @@ handlekb:
 .row3:
     and.b   #$0F,d6
     cmp.b   #8,d6
-    bge     .setpat
+    bge     .incpat
     and.w   #$03,d6
     cmp.b   #0,d6
     beq     .done
@@ -1254,6 +1325,9 @@ handlekb:
     cmp.b   #3,d6
     bne     .setstate           ; 1,2 - set state
     bset    #F_MOD,flags        ; 3 - modulate
+    move.w  pattern,d4          ; increment pattern
+    add.w   #1,d4     
+    move.b  d4,ppat             ; set for next modulate
     bra     .done 
 .setstate: 
     IFD TEST
@@ -1288,13 +1362,13 @@ handlekb:
     move.b  #1,(a1,d4.w)
     bra     .done
     ENDC
-.setpat:
+.incpat:
     move.w  #1,d0
     cmp.b   #9,d6
     bge     .inc
     neg.w   d0
 .inc
-    jsr     setpat
+    jsr     incpat
     bra     .done
 .done:
     bclr    #F_KEY,flags
@@ -1381,7 +1455,7 @@ pack:
     cmp.b   #countz,zeros     ; test for dead state
     blt     .norand
     clr.b   zeros
-    bset    #F_RAND,flags2
+    bset    #G_RAND,flags2
 .norand:
     rts
     
@@ -1473,6 +1547,7 @@ wavint:
     move.b  (a1)+,d3
     ext.w   d2
     ext.w   d3
+    IFD DOINT
     lsl.w   d0,d2
     lsl.w   d1,d3
     add.w   d2,d3
@@ -1481,16 +1556,12 @@ wavint:
     bgt     .hi
     move.w  #-126,d3
 .hi:
-    cmp.w   #126,d3 
+    cmp.w   #127,d3 
     blt     .lo
-    move.w  #126,d3
+    move.w  #127,d3
+    ENDC
 .lo:
     move.b  d3,(a2)+
-    move.w  d6,d2
-    and.w   #$F,d2
-    bne     .skip
-    move.w  (a3)+,d0
-    move.w  (a3)+,d1
 .skip:   
     dbra    d6,.tab  
     dbra    d4,.interp
@@ -1504,12 +1575,12 @@ tabint:
 ; initializes wav0/wav1
     CNOP    0,4
 initwav:
-    lea     sawtab,a0
-    lea     sqmtab,a1
+    lea     sqtab,a0
+    lea     asintab,a1
     lea     wav0,a2
     jsr     wavint
-    lea     sqtab,a0
-    lea     sqrtab,a1
+    lea     sintab,a0
+    lea     sintab,a1
     lea     wav1,a2
     jsr     wavint
     rts 
@@ -1518,6 +1589,7 @@ initwav:
 ; update all envelopes.
     CNOP    0,4
 doenv:
+    lea     audtab,a4
     move.l  #_AUD0LC,a3       ; audio base
     lea     ldstate,a2        ; param base
     lea     ldparms,a1        ; envelope/level  
@@ -1548,16 +1620,16 @@ doenv:
     bne     .end
     sub.w   LDR(a2),d3
     cmp.w   #0,d3
-    bgt     .end
+    bge     .end
     clr.w   d3
     clr.w   d1
 .end:
-    move.w  d3,8(a3)          ; set level
+    move.w  (a4)+,d5
+    move.w  d3,8(a3,d5.w)     ; set level
     move.w  d3,LDL(a1)        ; new level
     move.w  d1,LDE(a1)        ; new state
 .done:
     add.l   #2,a1             ; next channel
-    add.l   #AUDOFFSET,a3     ; next channel
     move.w  d6,d2
     and.w   #1,d2
     bne     .next
@@ -1576,7 +1648,8 @@ playlead:
     lea     ldenv,a3          ; envelope state
     lea     scoct,a2
     lea     ldlvl,a1
-    move.l  #wav0,d1
+    lea     audtab,a0
+    move.l  #wavm0,d1
     move.w  #1,d6             ; loop counter
 .loop:
     btst    #0,LDT(a5)        ; check trigger
@@ -1589,22 +1662,21 @@ playlead:
     move.w  (a2,d5.w),d0      ; get wavetable
     lsl.w   #TABSIZELOG,d0    ; wavetable offset
     ext.l   d0
-    add.l   d1,d0
-    move.l  d0,(a6)           ; set pointer
+    add.l   d1,d0             ; form pointer
     move.w  LDC(a5),d3        ; get voice
-  move.w #1,d3
-    lsl.w   #1,d3             ; ldparms offset
+    lsl.w   #1,d3             ; to offset
     move.w  LDI(a5),(a1,d3.w) ; set level
     move.w  #E_ATT,(a3,d3.w)  ; set env state
-    mulu.w  #AUDOFFSET/2,d3   ; get channel offset
+    move.w  (a0,d3.w),d3
+    move.l  d0,(a6,d3.w)      ; set pointer
     move.w  d4,6(a6,d3.w)     ; set period
     eor.w   #1,LDC(a5)        ; toggle voice
     bclr    #0,LDT(a5)        ; clear trigger
 .next:
-    add.l   #AUDOFFSET*2,a6   ; next channel set
     add.l   #2,a5             ; next channel
     add.l   #4,a3             ; ""
     add.l   #4,a1
+    add.l   #4,a0
     add.l   #wavsize,d1       ; ""
     add.l   #sclen*2,a2       ; ""
     dbra    d6,.loop
@@ -1655,6 +1727,38 @@ randstate:
     dbra    d5,.randloop
     rts
     ENDC
+
+;-----modlead()------------
+; updates wavm0/wavm1 by pwm
+modlead:
+    lea     wavm0,a0            ; dest position
+    lea     wav0,a1             ; source
+    lea     modtab,a2           ; modulation
+    lea     ldmp,a3             ; mod position
+    lea     ldmr,a4             ; mod rate
+    move.w  #TABSIZEW,d1
+    or.w    #(4<<6),d1          ; 4 lines
+    move.w  #1,d6               ; loop counter
+.loop:
+    waitblt
+    move.w  #$0D30,_BLTCON0     ; set params (A,B,D), LF AB'
+    clr.w   _BLTAMOD
+    clr.w   _BLTDMOD
+    move.w  #-TABSIZEB,_BLTBMOD
+    move.l  a0,_BLTDPT          ; set dest
+    move.l  a1,_BLTAPT          ; set A
+    move.w  (a3),d3             ; mod position
+    lea     (a2,d3.w),a5        ; B address
+    move.l  a5,_BLTBPT          ; set B           
+    move.w  d1,_BLTSIZE         ; start blit
+    move.w  (a4)+,d4            ; mod rate
+    add.w   d4,d3               ; update mod position
+    and.w   #$1F,d3             ; mod table size
+    move.w  d3,(a3)+
+    add.l   #wavsize,a0         ; update pointers
+    add.l   #wavsize,a1
+    dbra    d6,.loop
+    rts
 
 ;------------------------------------------------------------------------------
     end
