@@ -501,9 +501,11 @@ keyint:
     move.w  _INTREQR,d0         ; check req mask
     btst    #3,d0               ; PORTS handler
     beq     .exit
-    move.l  #CIAA,a0            ; CIA-A base
+    IFND TEST
     btst    #4,CIAICR(a0)       ; test FLAG bit (ppt)
     bne     .ppt
+    ENDC
+    move.l  #CIAA,a0            ; CIA-A base
     btst    #3,CIAICR(a0)       ; test SP bit (kb)
     beq     .exit
     move.b  CIASDR(a0),d6       ; load serial data
@@ -520,6 +522,7 @@ keyint:
     and.b   CIAICR(a0),d6
     beq     .handshake
     and.b   #$BF,CIACRA(a0)     ; set input mode
+    IFND TEST
     bra     .exit
 .ppt:
     lea     buf,a2
@@ -553,6 +556,7 @@ keyint:
     bset    #F_DATA,flags       ; indicate data received
     bset    #F_STEP,flags
     move.w  d6,bpos             ; update position
+    ENDC
 .exit:
     move.w  #$4008,_INTREQ
     move.w  #$4008,_INTREQ
@@ -623,9 +627,9 @@ vblankint:
     move.w  #1,d1               ; select pattern 1
     lea     fgpl0,a1            ; get fg pointer
     add.l   #celloff,a1
-;   jsr     drawpat             ; draw pattern 1 (fg)
+    jsr     drawpat             ; draw pattern 1 (fg)
     move.l  a3,a1
-;   jsr     drawpat             ; draw pattern 1 (bg)
+    jsr     drawpat             ; draw pattern 1 (bg)
 .nomatch1: 
 .nostep:
 .exit:
