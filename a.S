@@ -54,7 +54,8 @@ F_CLOCK16   equ 6               ; 16 tick event
 F_CLOCK8    equ 7               ; 8 tick event
 ;-----flag2 bits-----------
 G_RAND      equ 0               ; randomize next
-G_TABMOD    equ 1               ; mod tables next
+G_ONE       equ 1               ; init next
+G_TABMOD    equ 2               ; mod tables next
 G_ERR       equ 7               ; error exit
 
 ;-----buffer defs----------
@@ -149,36 +150,9 @@ init:
     move.w  #$0000,_BLTCON1     ; clear BLTCON1
     ENDC
 
-;-----init bitplanes-------
-    IFND DEBUG
-    lea     state,a0            ; cell state address
-    move.l  #stsizel-1,d0       ; loop counter
-.initstate:
-    clr.l   (a0)+
-    dbra    d0,.initstate
-    lea     hist,a0             ; history buffer address
-    move.l  #hsizel*2-1,d0      ; loop counter
-.inithist:  
-    clr.l   (a0)+
-    dbra    d0,.inithist
-    IFND NOGRAPH
-    lea     bgpl,a0             ; bitplane address
-    move.l  #bplsizel*2-1,d0    ; loop counter
-.initbpl:
-    clr.l   (a0)+
-    dbra    d0,.initbpl
-    ENDC
-    lea     cbuf,a0             ; state buffer addr
-    move.l  #bsizel-1,d0        ; loop counter
-.initbuf:
-    clr.l   (a0)+
-    dbra    d0,.initbuf
-    ENDC
-
 ;-----init state-----------
     move.w  #30,rule
-    lea     state,a0
-    move.b  #1,16(a0)
+    move.b  #1,state+16
     jsr     seed
 
 ;-----init sequence--------
@@ -295,14 +269,14 @@ init:
     move.l  #timerint,$78.w     ; install lvl6 handler (cia-b)
     move.b  #$88,CIAICR(a5)     ; enable CIA-A SP interrupt (keyboard)
     IFND PPOUT
-    move.b  #$82,CIAICR(a6)     ; enable CIA-B TB/flag interrupt ($90 for prod)
+    move.b  #$82,CIAICR(a6)     ; enable CIA-B TB interrupt
     ENDC
     IFD PPOUT
-    move.b  #$92,CIAICR(a6)     ; enable CIA-B TB/flag interrupt ($90 for prod)
+    move.b  #$92,CIAICR(a6)     ; enable CIA-B TB/flag interrupt
     ENDC
     move.w  #$E028,_INTENA      ; enable lvl2/3/6
-    waitr   a1,d0,d1,d2
     bset.b  #0,CIACRB(a6)       ; start CIA-B TB
+    waitr   a1,d0,d1,d2
     move.w  _COPJMP1,d0         ; start copper
     move.w  #$0088,_ADKCON      ; clear mod bits
     move.w  #$7FFF,_DMACON      
@@ -317,29 +291,26 @@ init:
 .nokey:
     btst    #F_UPDATE,flags
     beq     .noupdate
+    bclr    #F_UPDATE,flags   ; clear flag
+    jsr     nextstate
     jsr     pack
     IFD PPOUT
     jsr     writepp
     ENDC
     jsr     playseq
     jsr     update
-    bclr    #F_UPDATE,flags
-    bne     .exit
 .noupdate:
     btst    #F_MOD,flags
     beq     .nomod
+    bclr    #F_MOD,flags
     jsr     modulate
 .nomod:
     btst    #F_CLOCK8,flags
     beq     .noclock8
+    bclr    #F_CLOCK8,flags
     jsr     settrig
     jsr     setseq
 .noclock8:
-    btst    #G_RAND,flags2
-    beq     .norand
-    bclr    #G_RAND,flags2
-    jsr     randstate
-.norand:
 .endmain:
     btst    #6,$bfe001
     bne     .mainloop
@@ -421,7 +392,7 @@ init:
 .return:
 .xx:
     movem.l (sp)+,d1-d7/a0-a6
-    move.w  #1,d0
+    move.w  dbg,d0
     rts
 
 ;------interrupts----------
@@ -516,8 +487,7 @@ vblankint:
 timerint:
     movem.l d0-d7/a0-a6,-(sp)
     move.w  _INTREQR,d0         ; check req mask
-;   btst    #13,d0              ; PORTS handler
-    and.w   #$2000,d0
+    and.w   #$2000,d0           ; PORTS handler
     beq     .exit
     move.l  #CIAB,a0            ; CIA-B base
     btst    #1,CIAICR(a0)
@@ -550,7 +520,6 @@ timerint:
     move.b  d0,cpos
     cmp.b   #0,d0
     bne.b   .done
-    jsr     nextstate
     bset    #F_UPDATE,flags
 .done 
 .exit:
@@ -566,7 +535,7 @@ timerint:
     INCLUDE "pattern.i"
 
 ;------locals--------------
-    SECTION state,DATA_F
+    SECTION progst,DATA
     EVEN
 fgcol:
     dc.w    0                   ; foreground color mod
@@ -594,19 +563,8 @@ negate:
     dc.b    0
 negateb:
     dc.b    0                   ; 1 to flip states
-oncount:
-    ds.b    ncols               ; count of set bits by column
-xoncount:
-    ds.b    ncols               ; count of changes by column
-maj:
-    ds.b    ncells              ; count by individual columns
 key:
     dc.w    0                   ; last keypress
-popcnt:
-    dc.b    0,1,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 1,2  
-    EVEN
-popcntn:
-    dc.b    2,1,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 1,0  
     EVEN
 cpos:
     dc.b    0                   ; scroll position mod 8
@@ -618,10 +576,33 @@ md:
     dc.b    0                   ; current mode
     EVEN
 
+    SECTION cmetrics,BSS_F
+oncount:
+    ds.b    ncols               ; count of set bits by column
+xoncount:
+    ds.b    ncols               ; count of changes by column
+maj:
+    ds.b    ncells              ; count by individual columns
+
+    SECTION cmisc,DATA_F
+    CNOP    0,4
+packed:
+    dc.l    0                   ; packed state for transfer
+zeros:
+    dc.b    0
+    CNOP    0,4
+popcnt:
+    dc.b    0,1,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 1,2  
+    EVEN
+popcntn:
+    dc.b    2,1,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 1,0  
+
 ;------saves/system--------
     SECTION saves,DATA
     EVEN
 dbg:
+    dc.l    0
+dbg2:
     dc.l    0
 savelvl2:
     dc.l    0                   ; saved lvl2 handler
@@ -639,7 +620,7 @@ gfxname:
     dc.b    "graphics.library",0
 
 ;-----cell state-----------
-    SECTION cellst,DATA_F
+    SECTION cellst,BSS_F
     CNOP    0,4
 state:
     ds.b    stsize
@@ -651,12 +632,11 @@ hbuf:
     ds.b    ncells
 xhbuf:
     ds.b    ncells
-packed:
-    dc.l    0                   ; packed state for transfer
-zeros:
-    dc.b    0
+newstate:
+    ds.b    ncells              ; buffer for reset/random
 
 ;-----sequencer data--------
+    SECTION seqst,DATA_F
     CNOP    0,4
 seq:
     ds.w    seqlen*ncols        ; sequence note lists
@@ -745,7 +725,7 @@ cbuf:
     ds.b    stwidth*csize     ; state display buffer
 
 ;-----functions------------
-    SECTION funcs,CODE_F
+    SECTION funcs,CODE
 
 ;-----settrig()-------------
 ; Set sequence triggers from maj array.
@@ -873,7 +853,6 @@ update:
     dbra    d5,.inner
     addq    #1,a3             ; advance column
     dbra    d6,.outer
-    bclr    #F_UPDATE,flags   ; clear flag
     add.w   #1,hpos           ; update history position
     and.w   #wsize-1,hpos     ; mod wsize
     rts 
@@ -885,19 +864,31 @@ update:
 nextstate:
     lea     state,a0          ; state address
     move.l  a0,a1
+    move.w  pos,d0            ; current position 
+    move.w  d0,d6
+    incmod  d6,nstates
+    move.w  d6,pos            ; save new position
+    lsl.w   #stwidthlog,d0
+    lsl.w   #stwidthlog,d6
+    lea     (a0,d0.w),a0      ; current state
+    btst    #G_RAND,flags2 
+    beq     .norand
+    bclr    #G_RAND,flags2
+    jsr     randstate
+    lea     newstate,a0
+    bra     .noinit
+.norand:
+    btst    #G_ONE,flags2
+    beq     .noinit
+    bclr    #G_ONE,flags2
+    jsr     initstate
+    lea     newstate,a0
+.noinit:
+    lea     (a1,d6.w),a1      ; next state
     lea     hbuf,a2           ; history buffer address
     lea     xhbuf,a3  
     move.w  rule,d3           ; rule
-    clr.l   d0
-    move.w  pos,d0            ; current position 
-    move.l  d0,d1
-    incmod  d1,nstates
-    move.w  d1,pos            ; save new position
-    lsl.w   #stwidthlog,d0
-    lsl.w   #stwidthlog,d1
-    add.l   d0,a0             ; current state
-    add.l   d1,a1             ; next state
-    clr     d4                ; shift buffer
+    clr.b   d4                ; shift buffer
     move.b  stlast(a0),d0     ; s-1
     lsl.b   #2,d0
     or.b    d0,d4             ; add to buffer
@@ -1109,34 +1100,13 @@ handlekb:
     bset    #F_MOD,flags        ; 3 - modulate
     bra     .done 
 .setstate: 
-    move.w  pos,d4              ; get current position
-    lsl.w   #stwidthlog,d4      ; ..
-    move.w  #(ncells/4)-1,d5    ; loop counter
-.clear:
-    clr.l   (a1,d4.w)
-    addq    #4,d4
-    dbra    d5,.clear
     cmp.b   #1,d6
     beq.b   .reset1
 .resetrand:
-    move.w  pos,d4              ; get current position
-    lsl.w   #stwidthlog,d4      ; ..
-    move.w  #ncells-1,d5        ; loop counter
-.randloop:
-    jsr     prng
-    move.b  d0,d6
-    lsl.b   #2,d6
-    or.b    d0,d6
-    and.b   #1,d6
-    move.b  d6,(a1,d4.w)
-    add.w   #1,d4
-    dbra    d5,.randloop
+    bset    #G_RAND,flags2
     bra     .done
 .reset1:
-    move.w  pos,d4              ; get current position
-    lsl.w   #stwidthlog,d4      ; ..
-    add.w   #(ncells/2),d4
-    move.b  #1,(a1,d4.w)
+    bset    #G_ONE,flags2
     bra     .done
 .setpat:
     move.w  #1,d0
@@ -1192,7 +1162,6 @@ modulate:
     blt     .return
     move.b  #1,mode             ; restart mode counter
 .return:
-    bclr    #F_MOD,flags
     jsr     mkseq               ; compute new sequences
     rts
 
@@ -1277,8 +1246,6 @@ setpat:
 
 ;-----seed()---------------
 ; Seed the prng
-;-----prng()---------------
-; get prn in d0.l
     CNOP      0,4
 seed:
     move.l    #$deadbeef,d0
@@ -1291,6 +1258,10 @@ seed:
     dbra      d2,.loop    
     movem.l   d0-d1,rng
     rts
+
+;-----prng()---------------
+; get prn in d0.l
+    CNOP      0,4
 prng:
     movem.l   rng,d0-d1
     swap      d0
@@ -1303,22 +1274,30 @@ rng:
 
 ;-----randstate()-----------
 ; randomize the current state
-; uses d0,d4-d6,a1
-    CNOP      0,4
+; uses a0,d0-d3
 randstate:
-    lea     state,a1
-    move.w  pos,d4              ; get current position
-    lsl.w   #stwidthlog,d4      ; ..
-    move.w  #ncells-1,d5        ; loop counter
+    lea     newstate,a0
+    move.w  #ncells-1,d2        ; loop counter
 .randloop:
     jsr     prng
-    move.b  d0,d6
-    lsr.b   #2,d6
-    and.b   d0,d6
-    and.b   #1,d6
-    move.b  d6,(a1,d4.w)
-    add.w   #1,d4
-    dbra    d5,.randloop
+    move.b  d0,d1
+    lsl.b   #3,d1
+    or.b    d0,d1
+    and.b   #1,d1
+    move.b  d1,(a0)+
+    dbra    d2,.randloop
+    rts
+
+;-----initstate()----------
+; initialize the current state
+; uses a0,d0
+initstate:
+    lea     newstate,a0
+    move.l  #ncells/4-1,d0
+.clearloop:
+    clr.l   (a0)+
+    dbra    d0,.clearloop
+    move.b  #1,newstate+16
     rts
 
 ;-----mktab()--------------
@@ -1330,6 +1309,7 @@ mktab:
     lea     mtab32,a2           ; source B (mask)
     lea     seqptr,a5
     lea     seqstate,a6
+    waitblt
     move.w  #(tabsizew+$40),d1  ; set size for 1 line
     move.w  #$0D30,_BLTCON0     ; set params (A,B,D), LF AB'
     move.l  a0,_BLTDPT
@@ -1348,7 +1328,6 @@ mktab:
     lea     (a2,d5.w),a3        ; form mod address
     move.l  a3,_BLTBPT          ; set mask pointer
     move.l  (a5)+,_BLTAPT       ; set source pointer
-    waitblt
     move.w  d1,_BLTSIZE         ; start blit 
     clr.b   d4                  ; reset count
     add.b   #2,d5               ; increment pos  
