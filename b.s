@@ -3,6 +3,8 @@
     INCLUDE "wmacro.i"
     INCLUDE "hwdefs.i"
 
+; TODO: match index 16-18 plays nothing for v2
+
 ;-----macro defs-----------
 TEST        SET 1
 ;DEBUG       SET 1
@@ -69,22 +71,17 @@ wavsizew    equ (wavsize/2)
 ;-----flag bits------------
 F_STEP      equ 0               ; step screen next vblank
 F_KEY       equ 1               ; key pressed
-F_DATA      equ 2               ; data on LPT
-F_MATCH0    equ 3               ; match on pat0
-F_MATCH1    equ 4               ; match on pat1
-F_MATCH     equ 5               ; match on either
+F_DATA      equ 2               ; data ready from PPT
+F_DRAW      equ 4               ; match to draw next vblank
+F_MATCH     equ 5               ; match found
 F_ENV       equ 6               ; update envelopes
-F_MOD       equ 7               ; modulate
 ;------flag2 bits----------
-G_PLAY      equ 0               ; play next interval
-G_PAT       equ 1               ; accept pattern
-G_MODE      equ 2               ; accept mode
-G_LDM       equ 3               ; modulate lead
-G_RAND      equ 4               ; randomize next state
-G_ONE       equ 6               ; init next state
-
+G_PLAY      equ 0               ; play note next iter (delay?)
+G_LDM       equ 1               ; modulate lead
+G_RAND      equ 2               ; randomize next state
+G_ONE       equ 3               ; init next state
+G_MOD       equ 4               ; modulate next iter
 G_ERR       equ 7
-
 
 ;-----sequencer defs-------
 E_ATT       equ 1
@@ -159,7 +156,7 @@ init:
     ENDC
     
 ;-----init rng-------------
-    IFND DEBUG
+    IFD TEST
     jsr     seed
     ENDC
 
@@ -181,35 +178,26 @@ init:
     move.w  #$0000,_BLTCON1     ; clear BLTCON1
     ENDC
 
-;-----init bitplanes-------
-    IFND DEBUG
-    lea     bgpl,a0             ; bitplane address
-    move.l  #bplsizel*2-1,d0    ; loop counter
-.initbpl:
-    clr.l   (a0)+
-    dbra    d0,.initbpl
-    ENDC
-    move.l  #0,bplpos
-
 ;-----init buffers----------
     IFD TEST
-    lea     state,a0            ; cell state address
-    move.l  #stsizel-1,d0       ; loop counter
-.initstate:
-    clr.l   (a0)+
-    dbra    d0,.initstate
+    move.b  #1,state+16
     bset    #G_RAND,flags2
     ENDC
-    move.w  #1,pattern
+    move.w  #7,pattern
     move.w  pattern,d1
     jsr     loadpat
     jsr     loadscales
 
     IFD DEBUG
     lea     buf,a6
-    move.l  #%00000000000000000000000000000000,(a6)+
-    move.l  #%01000000000000000000011010101000,(a6)+
-    move.l  #%11011000000000000000000101010000,(a6)+
+;   move.l  #$FFFEBFFE,(a6)+
+;   move.l  #$8003E003,(a6)+
+;   move.l  #$BFFA2FFA,(a6)+
+;   move.l  #$E00EB80F,(a6)+
+;   move.l  #$2FEBEBE9,(a6)+
+    move.l  #%11111111111111111111111111111111,(a6)+
+    move.l  #%11111111111111111111111100001111,(a6)+
+    move.l  #%11111111111111111111111110011111,(a6)+
     move.l  #%00100000000000000000000010100000,(a6)+
     move.l  #%00000000000000000000000001000000,(a6)+
     move.l  #%00000000000000000000000000000000,(a6)+
@@ -261,18 +249,15 @@ init:
     move.w  #1,LDO(a6)
     move.w  #4,MDR(a6)
     add.l   #2,a6
-    move.w  #30,LDI(a6)
+    move.w  #40,LDI(a6)
     move.w  #90,LDV(a6)
     move.w  #16,LDA(a6)
-    move.w  #3,LDD(a6)
+    move.w  #5,LDD(a6)
     move.w  #60,LDS(a6)
     move.w  #6,LDR(a6)
     move.w  #0,LDO(a6)
     move.w  #1,MDR(a6)
     move.b  #0,mode
-    lea     ldlvl,a6
-    move.w  #120,(a6)+
-  
 
 ;-----setup copper list----
     IFND DEBUG
@@ -351,7 +336,7 @@ init:
     move.w  _COPJMP1,d0         ; start copper
     move.w  #$0088,_ADKCON      ; clear mod bits
     move.w  #$7FFF,_DMACON      
-    move.w  #$83EF,_DMACON      ; start DMA
+    move.w  #$87CF,_DMACON      ; start DMA
     ENDC
 
 ;-----frame loop start-------
@@ -361,18 +346,9 @@ init:
     bclr    #F_KEY,flags
     jsr     handlekb
 .nokey:
-    btst    #F_MOD,flags
-    beq     .nomod
-    bclr    #F_MOD,flags
-    jsr     modulate
-.nomod:
     btst    #F_DATA,flags
     beq     .nodata
     bclr    #F_DATA,flags
-    IFD TEST
-    move.w  pos,drawpos
-    jsr     nextstate
-    ENDC
     IFND TEST
     move.b  ppat,d0
     jsr     setpat
@@ -386,6 +362,11 @@ init:
     bclr    #F_ENV,flags
     jsr     doenv
 .noenv:
+    btst    #G_MOD,flags2
+    beq     .nomod
+    bclr    #G_MOD,flags2
+    jsr     modulate
+.nomod:
     btst    #G_LDM,flags2
     beq     .noldm
     bclr    #G_LDM,flags2
@@ -399,9 +380,9 @@ init:
     btst    #G_ERR,flags2
     beq     .endmain
     move.w  #$7FFF,_INTENA      ; turn off interrupts
-.errlp
-    btst    #6,$bfe001
-    bne     .errlp
+;.errlp
+;    btst    #6,$bfe001
+;    bne     .errlp
     bra     .exit
 .endmain:
     btst    #6,$bfe001
@@ -484,15 +465,10 @@ init:
 .return:
 .xx:
     movem.l (sp)+,d1-d7/a0-a6
-    IFD DEBUG
-    move.l  mx0,d0
-    move.l  mbits0,d1
-    move.l  mbits1,d2
-    ENDC
-    IFD TEST
-    move.w  bpos,d0
-    move.w  pos,d1
-    ENDC
+    move.w  dbg,d0
+    move.w  dbgn,d1
+    move.w  dbgo,d2
+    move.w  dbgx,d3
     rts
 
 ;------interrupts----------
@@ -564,7 +540,7 @@ keyint:
     rte
 
 vblankint:
-    movem.l d0-d6/a0-a3,-(sp)
+    movem.l d0-d6/a0-a6,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #5,d0               ; VBLANK handler
     beq     .exit
@@ -573,6 +549,7 @@ vblankint:
     btst    #F_STEP,flags
     beq     .nostep
     bclr    #F_STEP,flags
+    bset    #F_DATA,flags       ; data ready for next match
     move.w  coprpos,d5          ; get copper offset
     addmod  d5,width,bplsize    ; update start
     move.w  d5,coprpos
@@ -599,7 +576,7 @@ vblankint:
     add.w   #celloff,d5
     lea     (a0,d5.w),a3        ; render address
     IFD TEST
-    move.w  drawpos,d0          ; state position
+    move.w  drawpos,d0
     jsr     drawstate           ; draw state
     move.l  a3,a1               ; render address
     lea     cbuf,a0             ; source address
@@ -607,35 +584,41 @@ vblankint:
     ENDC
     lea     fgpl0,a1            ; get fg pointer
     jsr     clearrow            ; clear fg row
-    btst    #F_MATCH,flags
-    beq     .nomatch1
-    bclr    #F_MATCH,flags
+    btst    #F_DRAW,flags       ; match to render?
+    beq     .nomatch
+    bclr    #F_DRAW,flags
     sub.l   #patoffset,a3
-    btst    #F_MATCH0,flags     ; test for match on 0
-    beq     .nomatch0
     move.w  mx0,d0              ; load match index
+    cmp.w   #0,d0               ; test
+    ble     .nomatch0
+    sub.w   #1,d0               ; adjust
     move.w  #0,d1               ; select pattern 0
     lea     fgpl0,a1            ; get fg pointer
     add.l   #celloff,a1
     jsr     drawpat             ; draw pattern 0 (fg)
     move.l  a3,a1
     jsr     drawpat             ; draw pattern 0 (bg)
+    clr.w   mx0                 ; reset index
 .nomatch0:
-    btst    #F_MATCH1,flags     ; test for match on 1
-    beq     .nomatch1
     move.w  mx1,d0              ; load match index
+    cmp.w   #0,d0               ; test 
+    ble     .nomatch1
+  .noerr:
+    sub.w   #1,d0               ; adjust
     move.w  #1,d1               ; select pattern 1
     lea     fgpl0,a1            ; get fg pointer
     add.l   #celloff,a1
     jsr     drawpat             ; draw pattern 1 (fg)
     move.l  a3,a1
     jsr     drawpat             ; draw pattern 1 (bg)
+    clr.w   mx1                 ; reset index
 .nomatch1: 
+.nomatch:
 .nostep:
 .exit:
     move.w  #$4020,_INTREQ      ; clear INTREQ
     move.w  #$4020,_INTREQ      ; ... twice
-    movem.l (sp)+,d0-d6/a0-a3
+    movem.l (sp)+,d0-d6/a0-a6
     rte
 
 timerint:
@@ -656,13 +639,38 @@ timerint:
     and.b   #(csize-1),d0       ; mod and test 0
     move.b  d0,cpos
     cmp.b   #0,d0
-    bne.b   .exit
-    bset    #F_STEP,flags
+    bne     .exit
+    bset    #F_STEP,flags       ; set step
+    btst    #F_MATCH,flags      ; match found on prev data?
+    beq     .nomatch
+    bclr    #F_MATCH,flags
+    lea     ldstate,a0
+    clr.w   d2
+    move.w  mb0,d0
+    move.w  d0,mx0
+    clr.w   mb0
+    subq.w  #1,d0 
+    blt     .nomatch0
+    move.w  d0,LDN(a0,d2.w)     ; set note
+    bset    #0,LDT(a0,d2.w)     ; set trigger
+    bset    #F_DRAW,flags       ; request pattern draw
+    bset    #G_PLAY,flags2
+.nomatch0:
+    add.w   #2,d2
+    move.w  mb1,d0
+    move.w  d0,mx1
+    clr.w   mb1
+    subq.w  #1,d0 
+    blt     .nomatch1
+    move.w  d0,LDN(a0,d2.w)     ; set note
+    bset    #0,LDT(a0,d2.w)     ; set trigger
+    bset    #F_DRAW,flags       ; request pattern draw
+    bset    #G_PLAY,flags2
+.nomatch1:
+.nomatch:
     IFD TEST
-;   move.w  pos,drawpos         ; set draw position
-;   jsr     nextstate
-    bset    #F_DATA,flags
-    bra     .exit
+    move.w  pos,drawpos
+    jsr     nextstate
     ENDC
 .exit:
     move.w  #$6000,_INTREQ      ; clear INTREQ
@@ -691,10 +699,19 @@ pos:
     dc.w    0
 dbg:  
     dc.w    0
+dbgn:
+    dc.w    0
+dbgo:
+    dc.w    0
+dbgx:
+    dc.w    0
+dbgt:
+    dc.w    0
 ppat:
     dc.b    0                   ; pattern from ppt
 pmod:
     dc.b    0                   ; mode from ppt
+    EVEN
 audtab:
     dc.w    0, AUDOFFSET*3, AUDOFFSET*1, AUDOFFSET*2
 
@@ -771,9 +788,13 @@ mbits0:
 mbits1:
     dc.l    0                   ; match masks 1
 mx0:
-    dc.w    0
+    dc.w    0                   ; match index 0 (draw)
 mx1:
-    dc.w    0
+    dc.w    0                   ; match index 1 (draw)
+mb0:
+    dc.w    0                   ; match index 0 (buffer)
+mb1:
+    dc.w    0                   ; match index 1 (buffer)
 ptmp:
     dc.w    0
 
@@ -786,6 +807,7 @@ rule:
 zeros:
     dc.b    0
     ENDC 
+    SECTION cstate,BSS
     CNOP    0,4
 state:
     ds.b    stsize
@@ -881,10 +903,10 @@ bgplhi:
     ds.b    bplsize
     CNOP    0,4
 fgpl:
-    ds.b    bplsize-width*(pwidth-2)
+    ds.b    bplsize-width*(pwidth-1)
 fgpl0:
-    ds.b    width*(pwidth+2)
-patoffset   equ width*(pwidth-2)
+    ds.b    width*(pwidth+1)
+patoffset   equ width*(pwidth-1)
     IFD TEST
     CNOP    0,4
 cbuf:
@@ -964,6 +986,7 @@ loadpat:
     dbra    d6,.loada
 .startb:
     add.w   #2,d2               ; next map offset
+    add.w   #1,d0               ; next invert bit
     move.w  (a4,d2.w),d3        ; load map offset for next pattern
     lea     (a6,d1.w),a1        ; pattern 1 address
     lea     (a5,d3.w),a2        ; mask 1 address
@@ -1099,13 +1122,13 @@ setpat:
 ; match helper. check later rows for match and 
 ; set corresponding bit of mbits(0,1).
 ; d0 = pattern (0,1)
+; a0 = pattern base
 ; a1 = mask base
-; a2 = pattern base
 ; (a6,d5) = history row (preserve)
 ; a4, a5 = patterns (preserve)
 ; d6 = index + 7 (preserve)
 ; d2 = history data (preserve)
-; saves d2-d6,a4-a6, kills d0-d1,a1
+; saves d2-d6,a4-a6, kills d0-d1
     CNOP    0,4
 matchdown:
     movem.l d2-d6,-(sp)         ; save regs
@@ -1120,7 +1143,7 @@ matchdown:
     move.l  (a6,d5.w),d1        ; get row
     ror.l   d6,d1               ; rotate into position
     and.b   (a1,d0.w),d1        ; apply mask
-    cmp.b   (a2,d0.w),d1        ; compare
+    cmp.b   (a0,d0.w),d1        ; compare
     bne.b   .exit
     add.w   #1,d0               ; next row
     add.w   #4,d5               ; next window row
@@ -1148,13 +1171,6 @@ matchdown:
 ; buffer/patterns are packed
     CNOP    0,4
 match:
-.yy:
-; add.w   #1,dbg
-; cmp.w   #7,dbg
-; blt     .noerr
-; bset    #G_ERR,flags2
-; rts
-.noerr:
     lea     buf,a6              ; window base
     move.l  pat0,a4             ; pattern 0 base
     move.l  pat1,a5             ; pattern 1 base
@@ -1170,20 +1186,20 @@ match:
 .loop:
     move.b  d2,d1               ; get next 8 bits
     and.b   d3,d1               ; apply mask 0
-    cmp.b   (a4),d1             ; check
+    cmp.b   (a4),d1
     bne.b   .nomatch0
     move.w  #0,d0               ; 
+    move.l  a4,a0               ; pattern base
     move.l  a2,a1               ; mask base
-    move.l  a4,a2               ; pattern base
     jsr     matchdown           ; check remainder
 .nomatch0
     move.b  d2,d1               ; get next 8 bits
     and.b   d4,d1               ; apply mask 1
     cmp.b   (a5),d1             ; check
-    bne.b   .nomatch1           
+    bne.b   .nomatch1
     move.w  #1,d0
+    move.l  a5,a0               ; pattern base
     move.l  a3,a1               ; mask base
-    move.l  a5,a2               ; pattern base
     jsr     matchdown           ; check remainder
 .nomatch1:
     ror.l   #1,d2               ; next position
@@ -1201,9 +1217,6 @@ findmatch:
     move.w  #16,d6              ; up counter 
     lea     ldtrig,a6           ; trigger base
     lea     ldnote,a5           ; notes
-    bclr    #F_MATCH0,flags     ; clear bits
-    bclr    #F_MATCH1,flags
-    bclr    #F_MATCH,flags      ; ?
 .loop0:
     move.l  #1,d0
     lsl.l   d5,d0
@@ -1219,12 +1232,9 @@ findmatch:
 .up0:
     move.w  d6,d5
 .found0:
-    move.w  d5,mx0
-    bset    #F_MATCH0,flags
-    bset    #F_MATCH,flags
-    bset    #G_PLAY,flags2
-    move.w  d5,0(a5)            ; set note
-    bset    #0,0(a6)            ; set trigger
+    add.w   #1,d5
+    move.w  d5,mb0
+    bset    #F_MATCH,flags      ; match found
 .next:
     move.w  #15,d5              ; down counter
     move.w  #16,d6              ; up counter 
@@ -1243,12 +1253,9 @@ findmatch:
 .up1:
     move.w  d6,d5
 .found1:
-    move.w  d5,mx1
-    bset    #F_MATCH1,flags
-    bset    #F_MATCH,flags
-    bset    #G_PLAY,flags2
-    move.w  d5,2(a5)            ; set note
-    bset    #0,2(a6)            ; set trigger
+    add.w   #1,d5
+    move.w  d5,mb1
+    bset    #F_MATCH,flags      ; match found
 .done:
     rts
 
@@ -1341,7 +1348,7 @@ handlekb:
     bgt     .done
     cmp.b   #3,d6
     bne     .setstate           ; 1,2 - set state
-    bset    #F_MOD,flags        ; 3 - modulate
+    bset    #G_MOD,flags2       ; 3 - modulate
     move.w  pattern,d4          ; increment pattern
     add.w   #1,d4     
     move.b  d4,ppat             ; set for next modulate
@@ -1455,7 +1462,6 @@ pack:
     add.w   #4,d0             ; advance
     and.w   #$1F,d0           ; mod 4*window size
     move.w  d0,bpos
-;   bset    #F_DATA,flags     ; set data flag
     add.b   #1,d3             ; count zeros
     add.b   d3,zeros
     cmp.b   #countz,zeros     ; test for dead state
@@ -1463,7 +1469,6 @@ pack:
     clr.b   zeros
     bset    #G_RAND,flags2
 .norand:
-; bset #G_ERR,flags2
     rts
     
 ;-----drawstate(d0)--------
@@ -1581,13 +1586,19 @@ tabint:
 ; initializes wav0/wav1
     CNOP    0,4
 initwav:
-    lea     sqtab,a0
-    lea     asintab,a1
+;   lea     sqtab,a0
+;   lea     asintab,a1
     lea     wav0,a2
+  lea   sqtab,a0
+  lea   sqtab,a1
+  lea   wavm0,a2
     jsr     wavint
-    lea     sintab,a0
-    lea     sintab,a1
-    lea     wav1,a2
+;   lea     sintab,a0
+;   lea     sintab,a1
+;   lea     wav1,a2
+  lea   sawtab,a0
+  lea   sawtab,a1
+  lea   wavm1,a2
     jsr     wavint
     rts 
 
@@ -1749,6 +1760,7 @@ initstate:
 ;-----modlead()------------
 ; updates wavm0/wavm1 by pwm
 modlead:
+    rts
     lea     wavm0,a0            ; dest position
     lea     wav0,a1             ; source
     lea     modtab,a2           ; modulation
