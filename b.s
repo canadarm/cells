@@ -8,6 +8,8 @@
 ;-----macro defs-----------
 TEST        SET 1
 ;DEBUG       SET 1
+MODONE      SET 1
+DOINT       SET 1
 
 ;-----screen defs----------
 width       equ 320             ; plane width
@@ -183,7 +185,7 @@ init:
     move.b  #1,state+16
     bset    #G_RAND,flags2
     ENDC
-    move.w  #7,pattern
+    move.w  #8,pattern
     move.w  pattern,d1
     jsr     loadpat
     jsr     loadscales
@@ -247,7 +249,7 @@ init:
     move.w  #24,LDS(a6)
     move.w  #1,LDR(a6)
     move.w  #1,LDO(a6)
-    move.w  #4,MDR(a6)
+    move.w  #1,MDR(a6)
     add.l   #2,a6
     move.w  #40,LDI(a6)
     move.w  #90,LDV(a6)
@@ -256,7 +258,7 @@ init:
     move.w  #60,LDS(a6)
     move.w  #6,LDR(a6)
     move.w  #0,LDO(a6)
-    move.w  #1,MDR(a6)
+    move.w  #7,MDR(a6)
     move.b  #0,mode
 
 ;-----setup copper list----
@@ -365,6 +367,8 @@ init:
     btst    #G_MOD,flags2
     beq     .nomod
     bclr    #G_MOD,flags2
+    move.b  mode,d0
+    add.b   #1,d0
     jsr     modulate
 .nomod:
     btst    #G_LDM,flags2
@@ -466,9 +470,7 @@ init:
 .xx:
     movem.l (sp)+,d1-d7/a0-a6
     move.w  dbg,d0
-    move.w  dbgn,d1
-    move.w  dbgo,d2
-    move.w  dbgx,d3
+    move.w  key,d1
     rts
 
 ;------interrupts----------
@@ -545,7 +547,6 @@ vblankint:
     btst    #5,d0               ; VBLANK handler
     beq     .exit
     bset    #F_ENV,flags
-    bset    #G_LDM,flags2       ; request env update
     btst    #F_STEP,flags
     beq     .nostep
     bclr    #F_STEP,flags
@@ -629,6 +630,7 @@ timerint:
     move.l  #CIAB,a0            ; CIA-B base
     btst    #1,CIAICR(a0)       ; timer interrupt
     beq     .exit
+    bset    #G_LDM,flags2       ; request env update
     add.b   #1,count            ; increment count mod countmod
     cmp.b   #countmod,count     ; check for mod divider
     bne     .nomod
@@ -830,10 +832,10 @@ ldvoice:
     ds.w    2                 ; current voice
 ldtrig:
     ds.w    2                 ; triggers
-ldoct:
-    ds.w    2                 ; octaves
 ldinit:
     ds.w    2                 ; init volumes
+ldoct:
+    ds.w    2                 ; octaves
 ldvol:
     ds.w    2                 ; max volumes
 ldatt:
@@ -1042,7 +1044,7 @@ loadscales:
     lea     (a6,d5.w),a3      ; scale base
     move.b  (a3)+,d4          ; get scale length
     ext.w   d4
-    move.w  #8,d3
+    move.w  #9,d3
     sub.w   d4,d3             ; get scale offset to centre
     move.w  #sclen-1,d6       ; loop counter
 .copy:
@@ -1336,9 +1338,37 @@ handlekb:
     move.w  key,d6
     cmp.b   #$30,d6 
     bge.b   .row3
+    cmp.b   #$20,d6
+    bge.b   .row2
+    cmp.b   #$10,d6
+    bge.b   .row1
+.row0:  
+    subq.w  #1,d6
+    lea     ldstate,a0
+    move.w  #-1,d1              ; adjustment amount 
+    move.w  #1,d0               ; test odd
+    and.w   d6,d0
+    beq     .even0
+    neg.w   d1                  ; flip adj
+.even0:
+    and.w   #$6,d6              ; form param index
+    move.w  LDO(a0,d6.w),d0     ; get value
+    add.w   d1,d0               ; adjust
+    cmp.w   #0,d0               ; clamp
+    bgt     .pos0
+    clr.w   d0
+.pos0:
+    and.w   #$3,d0
+    move.w  d0,LDO(a0,d6.w)     ; new value
     bra     .done
+.row1:
+    lea     ldstate,a0
+    bra     .adj
+.row2:
+    lea     ldstate+2,a0
+    bra     .adj
 .row3:
-    and.b   #$0F,d6
+    and.b   #$F,d6
     cmp.b   #8,d6
     bge     .incpat
     and.w   #$03,d6
@@ -1348,11 +1378,30 @@ handlekb:
     bgt     .done
     cmp.b   #3,d6
     bne     .setstate           ; 1,2 - set state
+    IFD TEST
     bset    #G_MOD,flags2       ; 3 - modulate
-    move.w  pattern,d4          ; increment pattern
-    add.w   #1,d4     
-    move.b  d4,ppat             ; set for next modulate
+    ENDC
     bra     .done 
+.adj:
+    move.w  #-1,d1              ; adjustment amount 
+    move.w  #1,d0               ; test odd
+    and.w   d6,d0
+    beq     .even
+    neg.w   d1                  ; flip adj
+.even: 
+    and.w   #$E,d6              ; form param index (>>1, <<2)
+    cmp.w   #(5<<1),d6
+    bge     .done
+    lsl.w   #1,d6
+    move.w  LDV(a0,d6.w),d0     ; get param (vol, att, dec, sus, rel)
+    add.w   d1,d0               ; add adjustment
+    cmp.w   #0,d0               ; clamp
+    bgt     .pos
+    clr.w   d0
+.pos:
+    and.w   #$7F,d0
+    move.w  d0,LDV(a0,d6.w)     ; set new
+    bra     .done
 .setstate: 
     IFD TEST
     cmp.b   #1,d6
@@ -1586,19 +1635,16 @@ tabint:
 ; initializes wav0/wav1
     CNOP    0,4
 initwav:
-;   lea     sqtab,a0
-;   lea     asintab,a1
+    lea     asintab,a0
+    lea     asintab,a1
     lea     wav0,a2
-  lea   sqtab,a0
-  lea   sqtab,a1
-  lea   wavm0,a2
     jsr     wavint
-;   lea     sintab,a0
-;   lea     sintab,a1
-;   lea     wav1,a2
-  lea   sawtab,a0
-  lea   sawtab,a1
-  lea   wavm1,a2
+    lea     sqtab,a0
+    lea     sawtab,a1
+    lea     wav1,a2
+    IFD MODONE
+    lea wavm1,a2 
+    ENDC
     jsr     wavint
     rts 
 
@@ -1760,7 +1806,6 @@ initstate:
 ;-----modlead()------------
 ; updates wavm0/wavm1 by pwm
 modlead:
-    rts
     lea     wavm0,a0            ; dest position
     lea     wav0,a1             ; source
     lea     modtab,a2           ; modulation
@@ -1769,6 +1814,9 @@ modlead:
     move.w  #TABSIZEW,d1
     or.w    #(4<<6),d1          ; 4 lines
     move.w  #1,d6               ; loop counter
+    IFD MODONE
+    clr.w d6 ; only mod first
+    ENDC
 .loop:
     waitblt
     move.w  #$0D30,_BLTCON0     ; set params (A,B,D), LF AB'
@@ -1783,7 +1831,7 @@ modlead:
     move.w  d1,_BLTSIZE         ; start blit
     move.w  (a4)+,d4            ; mod rate
     add.w   d4,d3               ; update mod position
-    and.w   #$1F,d3             ; mod table size
+    and.w   #$7F,d3             ; mod table size
     move.w  d3,(a3)+
     add.l   #wavsize,a0         ; update pointers
     add.l   #wavsize,a1

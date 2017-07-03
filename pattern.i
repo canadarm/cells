@@ -1,4 +1,4 @@
-numpat      equ   13
+numpat      equ   14
 
 ;-----rule lists--------------
     SECTION amd,DATA
@@ -16,6 +16,7 @@ rules:
     dc.b    165,0
     dc.b    165,0
     dc.b    15,1
+    dc.b    9,0
     dc.b    9,0
     dc.b    120,0
     dc.b    18,1
@@ -108,16 +109,25 @@ p15:
     dc.b    %10010000
     dc.b    %00100000
     dc.b    %01000000
-    dc.b    0,0,0,0,0
+    dc.b    0,0,0,0
 p9:
     dc.b    %00000000
+    dc.b    %01000000
+    dc.b    %00000000
+    dc.b    0,0,0,0,0
+    dc.b    %11111000
+    dc.b    %10000000
+    dc.b    0,0,0,0,0,0
+p9x:
+    dc.b    %00000000
+    dc.b    %01000000
+    dc.b    %00000000
+    dc.b    %01000000
+    dc.b    %00000000
+    dc.b    0,0,0
     dc.b    %11100000
     dc.b    %10000000
-    dc.b    0,0,0,0,0
-    dc.b    %11100000
-    dc.b    %10100000
-    dc.b    %11100000
-    dc.b    0,0,0,0,0
+    dc.b    0,0,0,0,0,0
 p120:
     dc.b    %00111111
     dc.b    %10011111
@@ -246,6 +256,10 @@ mask23      equ   (*-masks)
     dc.b    %11100000
     dc.b    %11100000
     dc.b    0,0,0,0,0,0
+mask24      equ   (*-masks)
+    dc.b    %11110000
+    dc.b    %11110000
+    dc.b    0,0,0,0,0,0
 mask120     equ   (*-masks)
     dc.b    %11110000
     dc.b    %11110000
@@ -276,6 +290,13 @@ mask131b    equ   (*-masks)
     dc.b    %11100000
     dc.b    %01100000
     dc.b    0,0,0,0,0
+mask53      equ   (*-masks)
+    dc.b    %11100000
+    dc.b    %11100000
+    dc.b    %11100000
+    dc.b    %11100000
+    dc.b    %11100000
+    dc.b    0,0,0
 
 ;-----mask mappings-----------
     SECTION amdc,DATA_C
@@ -308,7 +329,10 @@ m15:
     dc.w    mask15b
 m9:
     dc.w    mask33 
-    dc.w    mask33 
+    dc.w    mask26
+m9x:
+    dc.w    mask53
+    dc.w    mask24
 m120:
     dc.w    mask23 
     dc.w    mask120 
@@ -342,7 +366,9 @@ b165x:
 b15:
     dc.b    1,1
 b9:
-    dc.b    0,0
+    dc.b    1,0
+b9x:
+    dc.b    1,0
 b120:
     dc.b    1,1
 b18:
