@@ -196,7 +196,7 @@ init:
     move.b  #8,seqstate+SQR+2
     move.b  #12,seqstate+SQR+3
     move.b  #1,seqstate+SQO+0
-    move.b  #2,seqstate+SQO+1
+    move.b  #1,seqstate+SQO+1
     move.b  #2,seqstate+SQO+2
     move.b  #1,seqstate+SQO+3
     move.w  #0,d0
@@ -209,7 +209,6 @@ init:
     jsr     mkseq
 
 ;-----init audio-----------
-    jsr     mktab
     move.l  #_AUD0LC,a6
     move.l  #wav,d5
     move.w  #ncols-1,d6
@@ -221,6 +220,7 @@ init:
     add.l   #tabsize,d5
     add.l   #AUDOFFSET,a6
     dbra    d6,.audlp
+    jsr     mktab
 
 ;-----init metrics---------
     lea     oncount,a0
@@ -330,16 +330,23 @@ init:
     beq     .noclock16
     bclr    #F_CLOCK16,flags
     jsr     setoct
+    move.w  #0,d0
+    jsr     mkseq
+    move.w  #1,d0
+    jsr     mkseq
+    move.w  #2,d0
+    jsr     mkseq
+    move.w  #3,d0
     jsr     mkseq
 .noclock16:
     btst    #F_CLOCK4,flags
     beq     .noclock4
     bclr    #F_CLOCK4,flags
+    jsr     settrig
 .noclock4:
     btst    #G_ERR,flags2
     beq     .endmain
     move.w  #$7FFF,_INTENA      ; turn off interrupts
-    jsr     settrig
 ;.errlp
 ;    btst    #6,$bfe001
 ;    bne     .errlp
@@ -425,7 +432,8 @@ init:
 .return:
 .xx:
     movem.l (sp)+,d1-d7/a0-a6
-    move.l  seqoct,d0
+    move.l  seqtrig+8,d0
+    move.l  seqtrig+12,d1
     rts
 
 ;------interrupts----------
@@ -720,7 +728,7 @@ modflags:
     dc.w    0                   ; modulation state
 seqptr:
     dc.l    sq32
-    dc.l    noise32
+    dc.l    asin32 
     dc.l    saw32  
     dc.l    sin32
 
@@ -762,11 +770,15 @@ coplist:
 ;-----bitplanes------------
     SECTION planes,BSS_C
     CNOP    0,4
+bgpad:
+    ds.b    stwidth
 bgpl:
     ds.b    bplsize
 bgplhi:
     ds.b    bplsize
     CNOP    0,4
+cpad:
+    ds.b    stwidth
 cbuf:
     ds.b    stwidth*csize     ; state display buffer
 
@@ -821,7 +833,7 @@ setoct:
 .nomaj:
     dbra    d5,.inner
     lsr.w   #1,d0
-    subq.w  #1,d0           ; subtract and clamp
+    subq.w  #2,d0           ; subtract and clamp
     bge     .next
     clr.w   d0
 .next:
@@ -1050,7 +1062,7 @@ copystate:
     CNOP    0,4
 mkseq:
     lea     modes,a6          ; get mode base
-    lea     ptab4,a5           ; get period table base
+    lea     ptab4,a5          ; get period table base
     lea     seq,a4            ; seq base
     lea     seqoct,a3         ; octaves
     lea     seqmod,a2         ; modes
@@ -1087,9 +1099,6 @@ playseq:
     move.l  #_AUD0LC,a4       ; audio register base
     lea     seqstate,a3       ; sequence state
     move.w  #ncols-1,d6       ; loop counter
-    IFD ONEVOICE
-    clr.w   d6
-    ENDC
 .loop:
     cmp.b   #0,SQG(a3)        ; gate
     beq     .notrig 
@@ -1378,15 +1387,14 @@ mktab:
     move.w  #(tabsizew+$40),d1  ; set size for 1 line
     clr.w   d3                  ; param position
     move.w  #ncols-1,d6         ; loop counter
-    waitblt
 .tabloop:
     move.b  SQC(a6,d3.w),d4     ; check count
     subq.b  #1,d4
-    cmp.b   #0,d4
     bge     .cont
     move.b  SQR(a6,d3.w),d4
     bra     .done
 .cont:
+    waitblt
     move.b  SQT(a6,d3.w),d5     ; mod position 
     ext.w   d5
     lea     (a2,d5.w),a3        ; form mod address
@@ -1405,6 +1413,7 @@ mktab:
     move.b  d4,SQC(a6,d3.w)     ; update count
     move.b  d5,SQT(a6,d3.w)     ; update position
     add.w   #1,d3               ; next params
+    add.l   #tabsize,a0         ; next table
     dbra    d6,.tabloop
     rts
 
