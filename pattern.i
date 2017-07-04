@@ -1,4 +1,4 @@
-numpat      equ   14
+numpat      equ   15
 
 ;-----rule lists--------------
     SECTION amd,DATA
@@ -8,20 +8,21 @@ pattern:
     CNOP    0,4
 rulesl      equ   1   ; shift for rule index
 rules:
-    dc.b    109,0 
-    dc.b    32,0
-    dc.b    150,0
-    dc.b    110,0
-    dc.b    161,0
-    dc.b    165,0
-    dc.b    165,0
-    dc.b    15,1
-    dc.b    9,0
-    dc.b    9,0
-    dc.b    120,0
-    dc.b    18,1
-    dc.b    125,1
-    dc.b    131,0
+    dc.b    109,0 ;0
+    dc.b    32,0  ;1
+    dc.b    150,0 ;2
+    dc.b    110,0 ;3
+    dc.b    161,0 ;4
+    dc.b    165,0 ;5
+    dc.b    165,0 ;6
+    dc.b    15,1  ;7
+    dc.b    9,0   ;8
+    dc.b    9,0   ;9
+    dc.b    120,0 ;10
+    dc.b    18,1  ;11
+    dc.b    125,1 ;12
+    dc.b    131,0 ;13
+    dc.b    153,0 ;14
 
 ;-----pattern bits--------
     CNOP    0,4
@@ -129,39 +130,52 @@ p9x:
     dc.b    %10000000
     dc.b    0,0,0,0,0,0
 p120:
-    dc.b    %00111111
-    dc.b    %10011111
+    dc.b    %10100000
+    dc.b    %01010000
     dc.b    0,0,0,0,0,0
-    dc.b    %11100000
-    dc.b    %00010000
-    dc.b    %10010000
-    dc.b    %01010000
-p18:
-    dc.b    %10101011
-    dc.b    %00000001
-    dc.b    %10000011
-    dc.b    %11000111
-    dc.b    %11101111
-    dc.b    0,0,0
-    dc.b    %01010000
     dc.b    %10001000
-    dc.b    0,0,0,0,0,0
+    dc.b    %01001000
+    dc.b    %00100000
+    dc.b    %00010000
+    dc.b    0,0,0,0
+p18:
+    dc.b    %10100000
+    dc.b    %00010000
+    dc.b    %10100000
+    dc.b    0,0,0,0,0
+    dc.b    %10101010
+    dc.b    %00000001
+    dc.b    %10000010
+    dc.b    %01000100
+    dc.b    %00101000
+    dc.b    0,0,0
 p125:
-    dc.b    %10000011
-    dc.b    %11111011
+    dc.b    %10000010
+    dc.b    %00001010
     dc.b    0,0,0,0,0,0
-    dc.b    %10010000
-    dc.b    %11010000
+    dc.b    %10001000
+    dc.b    %00101000
     dc.b    0,0,0,0,0,0
 p131:
-    dc.b    %00010000
-    dc.b    %00110000
-    dc.b    %01010000
+    dc.b    %00100000
+    dc.b    %01000000
+    dc.b    %10000000
     dc.b    0,0,0,0,0
+    dc.b    %00000000
     dc.b    %11100000
-    dc.b    %10010000
-    dc.b    %10110000
+    dc.b    %01000000
     dc.b    0,0,0,0,0
+p153:
+    dc.b    %00000000
+    dc.b    %01100000
+    dc.b    %01000000
+    dc.b    0,0,0,0,0
+    dc.b    %00000000
+    dc.b    %11110000
+    dc.b    %11100000
+    dc.b    %11000000
+    dc.b    %10000000
+    dc.b    0,0,0
  
 ;-----masks-------------------
     SECTION amdc,DATA_C
@@ -260,36 +274,48 @@ mask24      equ   (*-masks)
     dc.b    %11110000
     dc.b    %11110000
     dc.b    0,0,0,0,0,0
-mask120     equ   (*-masks)
-    dc.b    %11110000
-    dc.b    %11110000
-    dc.b    %11110000
+mask120a    equ   (*-masks)
+    dc.b    %11100000
     dc.b    %01110000
+    dc.b    0,0,0,0,0,0
+mask120b    equ   (*-masks)
+    dc.b    %11111000
+    dc.b    %01111000
+    dc.b    %00110000
+    dc.b    %00010000
     dc.b    0,0,0,0
 mask18a     equ   (*-masks)
+    dc.b    %11100000
+    dc.b    %11110000
+    dc.b    %11100000
+    dc.b    0,0,0,0,0
+mask18b     equ   (*-masks)
     dc.b    %11111110
-    dc.b    %11111110
+    dc.b    %11111111
     dc.b    %11111110
     dc.b    %01111100
     dc.b    %00111000
     dc.b    0,0,0
-mask18b     equ   (*-masks)
-    dc.b    %01110000
-    dc.b    %11111000
-    dc.b    0,0,0,0,0,0
 mask125a    equ   (*-masks)
     dc.b    %11111110
-    dc.b    %11111110
+    dc.b    %00001110
     dc.b    0,0,0,0,0,0
 mask125b    equ   (*-masks)
-    dc.b    %11100000
-    dc.b    %01100000
+    dc.b    %11111000
+    dc.b    %00111000
     dc.b    0,0,0,0,0,0
-mask131b    equ   (*-masks)
+mask153a    equ   (*-masks)
+    dc.b    %01110000
+    dc.b    %11110000
     dc.b    %11100000
-    dc.b    %11100000
-    dc.b    %01100000
     dc.b    0,0,0,0,0
+mask153b    equ   (*-masks)
+    dc.b    %11111000
+    dc.b    %11111000
+    dc.b    %11110000
+    dc.b    %11100000
+    dc.b    %11000000
+    dc.b    0,0,0
 mask53      equ   (*-masks)
     dc.b    %11100000
     dc.b    %11100000
@@ -334,17 +360,20 @@ m9x:
     dc.w    mask53
     dc.w    mask24
 m120:
-    dc.w    mask23 
-    dc.w    mask120 
+    dc.w    mask120a 
+    dc.w    mask120b
 m18:
-    dc.w    mask18a 
+    dc.w    mask18a
     dc.w    mask18b 
 m125:
-    dc.w    mask125a 
-    dc.w    mask125b 
+    dc.w    mask125a
+    dc.w    mask125b
 m131:
     dc.w    mask33
-    dc.w    mask131b
+    dc.w    mask33
+m153:
+    dc.w    mask153a
+    dc.w    mask153b
 
 ;-----invert bits---------
 invsl       equ   1     ; shift for inv index
@@ -375,6 +404,9 @@ b18:
     dc.b    1,1
 b125:
     dc.b    1,1
-b135:
+b131:
     dc.b    0,0
+b153:
+    dc.b    0,0
+
 

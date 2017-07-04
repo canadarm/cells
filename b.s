@@ -185,7 +185,7 @@ init:
     move.b  #1,state+16
     bset    #G_RAND,flags2
     ENDC
-    move.w  #8,pattern
+    move.w  #14,pattern
     move.w  pattern,d1
     jsr     loadpat
     jsr     loadscales
@@ -197,13 +197,13 @@ init:
 ;   move.l  #$BFFA2FFA,(a6)+
 ;   move.l  #$E00EB80F,(a6)+
 ;   move.l  #$2FEBEBE9,(a6)+
-    move.l  #%11111111111111111111111111111111,(a6)+
-    move.l  #%11111111111111111111111100001111,(a6)+
-    move.l  #%11111111111111111111111110011111,(a6)+
-    move.l  #%00100000000000000000000010100000,(a6)+
-    move.l  #%00000000000000000000000001000000,(a6)+
+    move.l  #%00000000000000000000000101010100,(a6)+
+    move.l  #%00000000000000000000001000000010,(a6)+
+    move.l  #%00000000000000000000000100000100,(a6)+
+    move.l  #%00000000000000000000000010001000,(a6)+
+    move.l  #%00000000000000000000000001010000,(a6)+
     move.l  #%00000000000000000000000000000000,(a6)+
-    move.w  #4,bpos
+    move.w  #0,bpos
     jsr     match
     bra     .exit
     ENDC
@@ -469,8 +469,8 @@ init:
 .return:
 .xx:
     movem.l (sp)+,d1-d7/a0-a6
-    move.w  dbg,d0
-    move.w  key,d1
+    move.l  mbits1,d0
+    move.w  mb0,d1
     rts
 
 ;------interrupts----------
