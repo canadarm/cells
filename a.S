@@ -821,6 +821,7 @@ settrig:
 setoct:
     lea     seqoct,a0       ; octave params
     lea     maj,a1          ; column counts
+    lea     seqrate,a2      ; mod rates
     move.w  #ncols-1,d6     ; outer loop counter
 .outer:
     clr.w   d0              ; maj sum
@@ -849,9 +850,15 @@ setseq:
     lea     xoncount,a1
     lea     seql,a2
     lea     seqgate,a3
+    lea     seqvol,a4
+    lea     seqdec,a5
     move.w  #ncols-1,d6     ; loop counter
 .loop:
     move.b  (a0)+,d0        ; count
+    move.b  d0,d1
+    lsr.b   #2,d1           ; div by 4
+    add.b   #80,d1
+    move.b  d1,(a4)+        ; set vol = c/4 + 80 
     lsr.b   #3,d0           ; divide by 8
     add.b   #3,d0           ; add 3
     cmp.b   #seqlen,d0      ; saturate  
@@ -866,6 +873,10 @@ setseq:
     move.b  #1,d1
 .setgate:
     move.b  d1,(a3)+        ; set gate value
+    move.b  d0,d1
+    lsr.b   #3,d1           ; div by 8
+    add.b   #6,d1         
+    move.b  d1,(a5)+        ; set decay
     dbra    d6,.loop
     rts
 
