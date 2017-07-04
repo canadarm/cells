@@ -3,10 +3,9 @@
     INCLUDE "wmacro.i"
     INCLUDE "hwdefs.i"
 
-; TODO: match index 16-18 plays nothing for v2
-
 ;-----macro defs-----------
 TEST        SET 1
+;SHOWCELLS   SET 1
 ;DEBUG       SET 1
 ;MODONE      SET 1
 DOINT       SET 1
@@ -475,8 +474,9 @@ init:
 .return:
 .xx:
     movem.l (sp)+,d1-d7/a0-a6
-    move.l  mbits1,d0
-    move.w  mb1,d1
+    move.w  bplpos,d0
+    move.w  coprpos,d1
+    move.l  dbg,d2
     rts
 
 ;------interrupts----------
@@ -557,69 +557,91 @@ vblankint:
     beq     .nostep
     bclr    #F_STEP,flags
     bset    #F_DATA,flags       ; data ready for next match
+    lea     bgpl,a0             ; get screen base
     move.w  coprpos,d5          ; get copper offset
     addmod  d5,width,bplsize    ; update start
     move.w  d5,coprpos
-    lea     bgpl,a0
+    IFND SHOWCELLS
+    lea     bgpl,a2
+    lea     (a2,d5.w),a1
+    move.w  #8,d1
+    jsr     clearpl
+    add.l   #bplsize,a1
+    jsr     clearpl
+    ENDC
     lea     (a0,d5.w),a1        ; copper start
     move.l  a1,d6
     move.w  d6,copptrl          ; update copper pointers
     swap    d6
     move.w  d6,copptrh
+    IFD SHOWCELLS
     lea     bgpl,a0             ; screen base for copy
+    ELSE
+    lea     bgpl0,a0
+    ENDC
     move.w  bplpos,d4           ; offset for copy
+    addmod  d4,width,bplsize    ; increment
     move.w  d4,d5
     add.w   #celloff,d5
     lea     (a0,d5.w),a2        ; copy address
     IFD TEST
+    IFD SHOWCELLS
     lea     cbuf,a0             ; source address
     move.l  a2,a1               ; copy address
     jsr     copystate           ; copy state
-    ENDC
     lea     bgplhi,a0           ; screen base for render
-    addmod  d4,width,bplsize    ; increment
+    ELSE
+    lea     bgplhi0,a0
+    ENDC
+    ENDC
     move.w  d4,bplpos
     move.w  d4,d5 
     add.w   #celloff,d5
     lea     (a0,d5.w),a3        ; render address
     IFD TEST
+    IFD SHOWCELLS
     move.w  drawpos,d0
     jsr     drawstate           ; draw state
     move.l  a3,a1               ; render address
     lea     cbuf,a0             ; source address
     jsr     copystate
     ENDC
+    ENDC
     lea     fgpl0,a1            ; get fg pointer
     jsr     clearrow            ; clear fg row
     btst    #F_DRAW,flags       ; match to render?
     beq     .nomatch
     bclr    #F_DRAW,flags
-    sub.l   #patoffset,a3
+    add.l   #celloff,a1         ; add offset
+    move.l  a1,a4               ; stash
+    IFD SHOWCELLS
+    sub.l   #patoffset,a3       ; add bg offset
+    sub.l   #patoffset,a2       ; add bg offset
+    ENDC
     move.w  mx0,d0              ; load match index
-    cmp.w   #0,d0               ; test
-    ble     .nomatch0
-    sub.w   #1,d0               ; adjust
+    subq.w  #1,d0               ; adjust
+    blt     .nomatch0
+    add.w   #1,dbg
     move.w  #0,d1               ; select pattern 0
-    lea     fgpl0,a1            ; get fg pointer
-    add.l   #celloff,a1
+    move.l  a4,a1
     jsr     drawpat             ; draw pattern 0 (fg)
     move.l  a3,a1
     jsr     drawpat             ; draw pattern 0 (bg)
     clr.w   mx0                 ; reset index
 .nomatch0:
     move.w  mx1,d0              ; load match index
-    cmp.w   #0,d0               ; test 
-    ble     .nomatch1
-  .noerr:
-    sub.w   #1,d0               ; adjust
+    subq.w  #1,d0               ; adjust
+    blt     .nomatch1
     move.w  #1,d1               ; select pattern 1
-    lea     fgpl0,a1            ; get fg pointer
-    add.l   #celloff,a1
+    move.l  a4,a1
     jsr     drawpat             ; draw pattern 1 (fg)
     move.l  a3,a1
     jsr     drawpat             ; draw pattern 1 (bg)
     clr.w   mx1                 ; reset index
 .nomatch1: 
+    move.l  a3,a0               ; bg address
+    move.l  a2,a1               ; copy address
+    jsr     copyrow
 .nomatch:
 .nostep:
 .exit:
@@ -706,7 +728,7 @@ bpos:
 pos:
     dc.w    0
 dbg:  
-    dc.w    0
+    dc.l    0
 dbgn:
     dc.w    0
 dbgo:
@@ -904,22 +926,24 @@ coplist:
 
 ;-----bitplanes------------
     SECTION planes,BSS_C
+patoffset   equ width*(pwidth-1)
     CNOP    0,4
+bgpl0:
+    ds.b    (patoffset)
 bgpl:
-    ds.b    bplsize
+    ds.b    (bplsize-(patoffset))
+bgplhi0:
+    ds.b    (patoffset)
 bgplhi:
     ds.b    bplsize
     CNOP    0,4
 fgpl:
-    ds.b    bplsize-width*(pwidth-1)
+    ds.b    (bplsize-patoffset)
 fgpl0:
-    ds.b    width*(pwidth+1)
-patoffset   equ width*(pwidth-1)
-    IFD TEST
+    ds.b    (patoffset+width)
     CNOP    0,4
 cbuf:
     ds.b    stwidth*csize     ; state display buffer
-    ENDC
 
 ;-----color tables---------
     SECTION amd,DATA
@@ -1288,6 +1312,10 @@ drawpat:
     beq     .idx0
     lea     spr1,a0
 .idx0:
+    move.w  #sprwidthw,d0     ; word count
+    move.w  #csize*pwidth,d1  ; height
+    lsl.w   #6,d1             ; in bit pos 6
+    or.w    #$0BFA,d3         ; set control bits
     waitblt
     move.l  a1,_BLTDPT        ; D address
     move.l  a1,_BLTCPT        ; C address
@@ -1295,47 +1323,47 @@ drawpat:
     clr.w   _BLTAMOD          ; set A modulo
     move.w  #coff*2,_BLTDMOD  ; set D modulo
     move.w  #coff*2,_BLTCMOD  ; set C modulo
-    or.w    #$0BFA,d3         ; set control bits
     move.w  d3,_BLTCON0       ; enable A,C,D, LF A + C (9)
-    move.w  #sprwidthw,d0     ; word count
-    move.w  #csize*pwidth,d1  ; height
-    lsl.w   #6,d1             ; in bit pos 6
     or.w    d1,d0             ; form blit size
     move.w  d0,_BLTSIZE       ; start blit
     move.w  d6,d1             ; restore regs
     move.w  d5,d0
     rts 
 
-;-----clearrow(a1)----------
-; clear the pwidth*csize lines starting at
-; the address in a1.
     CNOP    0,4
-clearrow:
+clearmem:
     waitblt
-    move.l  a1,_BLTDPT        ; dest ptr
+    move.l  a1,_BLTDPT
     clr.w   _BLTDMOD          ; set D modulo (0)
     move.w  #$0100,_BLTCON0   ; enable only D (clear)
-    move.w  #bplwidthw,d0     ; word count
-    move.w  #csize*pwidth,d1  ; height
     lsl.w   #6,d1             ; .. in pos 6
     or.w    d1,d0             ; form blit size
     move.w  d0,_BLTSIZE       ; start blit
     rts
 
 ;-----clearpl(a1)------------
-; zero out the bit plane at a1.
+; zero out the bit plane at a1 with height d1
     CNOP    0,4
 clearpl:
-    waitblt
-    move.l  a1,_BLTDPT
-    clr.w   _BLTDMOD          ; set D modulo (0)
-    move.w  #$0100,_BLTCON0   ; enable only D (clear)
     move.w  #bplwidthw,d0     ; word count
-    move.w  #height,d1        ; height
-    lsl.w   #6,d1             ; .. in pos 6
-    or.w    d1,d0             ; form blit size
-    move.w  d0,_BLTSIZE       ; start blit
-    rts
+    bra     clearmem
+
+;-----clearrow(a1)----------
+; clear the pwidth*csize lines starting at
+; the address in a1.
+    CNOP    0,4
+clearrow:
+    move.w  #bplwidthw,d0     ; word count
+    move.w  #csize*pwidth,d1  ; height
+    bra     clearmem
+
+;-----clearline(a1)------------
+; zero out the line at a1.
+    CNOP    0,4
+clearline:
+    move.w  #bplwidthw,d0     ; word count
+    move.w  #csize,d1         ; height
+    bra     clearmem
   
 ;-----handlekb()------------
 ; Process the key buffer.
@@ -1563,23 +1591,40 @@ drawstate:
     dbra    d1,.copyout
     rts 
 
+    CNOP    0,4
+copymem:
+    waitblt
+    move.l  a1,_BLTDPT        ; set D pointer
+    move.l  a0,_BLTAPT        ; set A pointer
+    move.w  d2,_BLTDMOD       ; set D modulo 
+    move.w  d3,_BLTAMOD       ; set A modulo
+    move.w  #$09F0,_BLTCON0   ; enable A,D, LF A
+    lsl.w   #6,d1             ; move height into position
+    or.w    d1,d0             
+    move.w  d0,_BLTSIZE       ; start the blit
+    rts
+
 ;-----copystate()-------
 ; Copy the contents of the rendered state at a0
 ; into the display at address a1
     CNOP    0,4
 copystate:
-    waitblt
-    move.l  a1,_BLTDPT        ; set D pointer
-    move.l  a0,_BLTAPT        ; set A pointer
-    clr.w   _BLTAMOD          ; set A modulo
-    move.w  #celloff*2,_BLTDMOD  ; set D modulo 
-    move.w  #$09F0,_BLTCON0   ; enable A,D, LF A
-    move.l  #stwidthw,d0      ; word count
+    move.w  #stwidthw,d0      ; word count
     move.w  #csize,d1         ; height
-    lsl.w   #6,d1             ; move height into position
-    or.w    d1,d0             
-    move.w  d0,_BLTSIZE       ; start the blit
-    rts
+    move.w  #celloff*2,d2     ; D modulo
+    clr.w   d3                ; A modulo
+    bra     copymem
+
+;-----copyrow()---------
+; Copies the psize-sized row at a0 into a1.
+    CNOP    0,4
+copyrow:
+    move.w  #stwidthw,d0      ; word count
+    move.w  #pwidth*csize,d1  ; height
+    move.w  #celloff*2,d2     ; D modulo
+    move.w  d2,d3             ; A modulo
+    bra     copymem
+
     ENDC
 
 ;-----wavcopy(a0,a1)--------
