@@ -37,7 +37,6 @@ wsizelog    equ 3               ; log2(wsize)
 wsize       equ (1<<wsizelog)   ; window size (rows)
 hsize       equ (ncells*wsize)  ; history window size
 hsizel      equ (hsize/4)       ; history window size in dwords
-hsizemod    equ (hsize-1)
 ncolslog    equ 2               ; log2(ncols)
 ncols       equ (1<<ncolslog)   ; number of columns for metrics
 colsize     equ (ncells>>ncolslog)
@@ -47,11 +46,10 @@ colsizel    equ (colsize/4)
 F_DRAW      equ 0               ; render next vblank
 F_KEY       equ 1               ; key pressed
 F_UPDATE    equ 2               ; update sequence parms
-F_COLOR     equ 3               ; modulate color
 F_MOD       equ 4               ; modulate sequence
 F_TRANSP    equ 5               ; transpose root
 F_CLOCK16   equ 6               ; 16 tick event
-F_CLOCK8    equ 7               ; 8 tick event
+F_CLOCK4    equ 7               ; 4 tick event
 ;-----flag2 bits-----------
 G_RAND      equ 0               ; randomize next
 G_ONE       equ 1               ; init next
@@ -70,7 +68,7 @@ bgmax       equ $0333
 
 ;-----sequence defs--------
 countmod    equ 64                      ; 16th notes between mode transition
-countz      equ 8                       ; dead states before randomize
+countz      equ 4                       ; dead states before randomize
 F_DESC      equ 0                       ; descending flag
 F_PERF      equ 1                       ; move to perfect flag
 
@@ -151,9 +149,18 @@ init:
     ENDC
 
 ;-----init state-----------
-    move.w  #30,rule
-    move.b  #1,state+16
     jsr     seed
+    move.w  #0,pattern
+    clr.w   d0
+    jsr     setpat
+    move.w  #1,state+16
+
+    IFD DEBUG
+    jsr     nextstate
+    jsr     pack
+    jsr     update
+    bra     .exit
+    ENDC
 
 ;-----init sequence--------
     lea     seqtrig,a0
@@ -172,14 +179,13 @@ init:
     move.b  #0,SQM(a0)          ; modulation
     move.b  #seqlen,SQLN(a0)    ; length
     move.b  #90,SQV(a0)         ; volume
-    move.b  #8,SQD(a0)          ; decay
+    move.b  #12,SQD(a0)         ; decay
     move.b  #0,SQT(a0)          ; table pos
     move.b  #2,SQR(a0)          ; table mod rate
     move.b  #0,SQC(a0)          ; table mod count
     move.b  #0,SQX(a0)          ; enable
     move.b  d4,d3
     and.b   #1,d3
-    add.b   #1,d3
     move.b  d3,SQO(a0)          ; octave
     addq    #1,a0
     dbra    d4,.initseq
@@ -299,18 +305,25 @@ init:
     ENDC
     jsr     playseq
     jsr     update
+    jsr     setseq
 .noupdate:
     btst    #F_MOD,flags
     beq     .nomod
     bclr    #F_MOD,flags
     jsr     modulate
 .nomod:
-    btst    #F_CLOCK8,flags
-    beq     .noclock8
-    bclr    #F_CLOCK8,flags
+    btst    #F_CLOCK4,flags
+    beq     .noclock4
+    bclr    #F_CLOCK4,flags
+.noclock4:
+    btst    #G_ERR,flags2
+    beq     .endmain
+    move.w  #$7FFF,_INTENA      ; turn off interrupts
     jsr     settrig
-    jsr     setseq
-.noclock8:
+;.errlp
+;    btst    #6,$bfe001
+;    bne     .errlp
+    bra     .exit
 .endmain:
     btst    #6,$bfe001
     bne     .mainloop
@@ -392,7 +405,7 @@ init:
 .return:
 .xx:
     movem.l (sp)+,d1-d7/a0-a6
-    move.w  dbg,d0
+    move.l  seql,d0
     rts
 
 ;------interrupts----------
@@ -499,18 +512,17 @@ timerint:
 ;   bset    #F_MOD,flags        ; reset count and modulate
 .nomod:
     move.b  count,d0            ; check counter modulo
-    and.b   #$0F,d0             ; 16th note
-    cmp.b   #0,d0
+    and.b   #$3F,d0
+    and.b   d0,d1
     bne.b   .no16
     bset    #F_CLOCK16,flags
 .no16:
-    and.b   #$07,d0
-    cmp.b   #0,d0
-    beq.b   .no8
-    bset    #F_CLOCK8,flags
-.no8:
+    and.b   #$F,d0
+    bne.b   .no4
+    bset    #F_CLOCK4,flags
+.no4:
     move.b  cpos,d0             ; increment mod position
-    addq    #1,d0
+    add.b   #1,d0
     cmp.b   #(csize/2),d0       ; if halfway, request render
     bne.b   .nodraw
     bset    #F_DRAW,flags       ; set draw bit
@@ -577,6 +589,7 @@ md:
     EVEN
 
     SECTION cmetrics,BSS_F
+    CNOP    0,4
 oncount:
     ds.b    ncols               ; count of set bits by column
 xoncount:
@@ -592,10 +605,39 @@ zeros:
     dc.b    0
     CNOP    0,4
 popcnt:
-    dc.b    0,1,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 1,2  
-    EVEN
-popcntn:
-    dc.b    2,1,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 1,0  
+    dc.b    0,1,0,0,0,0,0,0 
+    dc.b    0,0,0,0,0,0,0,0
+    dc.b    0,0,0,0,0,0,0,0 ;16
+    dc.b    0,0,0,0,0,0,0,0 
+    dc.b    0,0,0,0,0,0,0,0 ;32
+    dc.b    0,0,0,0,0,0,0,0 
+    dc.b    0,0,0,0,0,0,0,0 ;48
+    dc.b    0,0,0,0,0,0,0,0 
+    dc.b    0,0,0,0,0,0,0,0 ;64
+    dc.b    0,0,0,0,0,0,0,0 
+    dc.b    0,0,0,0,0,0,0,0 ;80
+    dc.b    0,0,0,0,0,0,0,0 
+    dc.b    0,0,0,0,0,0,0,0 ;96
+    dc.b    0,0,0,0,0,0,0,0 
+    dc.b    0,0,0,0,0,0,0,0 ;112
+    dc.b    0,0,0,0,0,0,0,0 
+    dc.b    0,0,0,0,0,0,0,0 ;128
+    dc.b    0,0,0,0,0,0,0,0
+    dc.b    0,0,0,0,0,0,0,0 ;16
+    dc.b    0,0,0,0,0,0,0,0 
+    dc.b    0,0,0,0,0,0,0,0 ;32
+    dc.b    0,0,0,0,0,0,0,0 
+    dc.b    0,0,0,0,0,0,0,0 ;48
+    dc.b    0,0,0,0,0,0,0,0 
+    dc.b    0,0,0,0,0,0,0,0 ;64
+    dc.b    0,0,0,0,0,0,0,0 
+    dc.b    0,0,0,0,0,0,0,0 ;80
+    dc.b    0,0,0,0,0,0,0,0 
+    dc.b    0,0,0,0,0,0,0,0 ;96
+    dc.b    0,0,0,0,0,0,0,0 
+    dc.b    0,0,0,0,0,0,0,0 ;112
+    dc.b    0,0,0,0,0,0,0,0 
+    dc.b    1,2,0,0,0,0,0,0 ;128
 
 ;------saves/system--------
     SECTION saves,DATA
@@ -739,7 +781,7 @@ settrig:
 .trigloop:
     clr.b   d1              ; zero trigger
     move.b  (a1)+,d0        ; count
-    cmp.b   #(wsize/2),d0   ; test majority
+    cmp.b   #(wsize/2)-2,d0 ; test majority
     blt.b   .notrig
     add.b   #1,d1
 .notrig:
@@ -749,7 +791,7 @@ settrig:
 .negloop:
     clr.b   d1              ; zero trigger
     move.b  (a1)+,d0        ; count
-    cmp.b   #(wsize/2),d0   ; test majority
+    cmp.b   #(wsize/2)+2,d0 ; test majority
     bge.b   .notrig2
     add.b   #1,d1
 .notrig2:
@@ -769,8 +811,8 @@ setseq:
     move.w  #ncols-1,d6     ; loop counter
 .loop:
     move.b  (a0)+,d0        ; count
-    lsr.b   #2,d0           ; divide by 4
-    add.b   #2,d0           ; add 2
+    lsr.b   #3,d0           ; divide by 8
+    add.b   #3,d0           ; add 3
     cmp.b   #seqlen,d0      ; saturate  
     blt.b   .nosat
     move.b  #seqlen,d0
@@ -778,7 +820,7 @@ setseq:
     move.b  d0,(a2)+        ; set length
     move.b  (a1)+,d0        ; xcount
     clr.b   d1              ; gate value
-    cmp.b   #4,d0           ; check gate threshold
+    cmp.b   #11,d0          ; check gate threshold
     blt     .setgate
     add.b   #1,d1
 .setgate:
@@ -794,8 +836,8 @@ update:
     lea     hist,a0
     lea     hbuf,a1
     lea     maj,a2            ; column counts
-    clr.l   d0
     move.w  hpos,d0           ; history position
+    ext.l   d0
     lsl.w   #ncellslog,d0     ; history index
     add.l   d0,a0
     move.w  #ncells-1,d6      ; loop counter
@@ -808,13 +850,9 @@ update:
     lea     hist,a0
     lea     hbuf,a1
     lea     popcnt,a2
-    lea     popcnt,a5
-    cmp.b   #0,negateb 
-    beq     .pos
-    lea     popcntn,a5        ; use negated popcnt
-.pos:
     lea     oncount,a3
     lea     xhist,a4
+    lea     xoncount,a5
     move.w  #ncols-1,d6       ; outer loop over columns
 .outer:
     move.w  #colsizel-1,d5    ; inner loop over dwords 
@@ -826,32 +864,28 @@ update:
     add.b   d2,d3             ; popcnt hist
     move.l  ncells(a1),d1     ; xbuf word
     move.l  d1,(a4,d0.w)      ; save in history
+    lea     (a2,d1.w),a6
     move.b  (a2,d1.w),d2      ; popcnt buf high
     swap    d1
     move.b  (a2,d1.w),d4      ; popcnt buf low
     add.b   d4,d2             ; popcnt buf
     sub.b   d3,d2             ; total change
-    add.b   d2,ncols(a3)      ; store new col value
+    add.b   d2,(a5)+          ; store new col value
     move.l  (a0,d0.w),d1      ; history word
-    move.b  (a5,d1.w),d2      ; popcnt hist high
+    move.b  (a2,d1.w),d2      ; popcnt hist high
     swap    d1
-    move.b  (a5,d1.w),d3      ; popcnt hist low
+    move.b  (a2,d1.w),d3      ; popcnt hist low
     add.b   d2,d3             ; popcnt hist
     move.l  (a1)+,d1          ; buf word
     move.l  d1,(a0,d0.w)      ; save in history
-    move.b  (a5,d1.w),d2      ; popcnt buf high
+    move.b  (a2,d1.w),d2      ; popcnt buf high
     swap    d1
-    move.b  (a5,d1.w),d4      ; popcnt buf low
+    move.b  (a2,d1.w),d4      ; popcnt buf low
     add.b   d4,d2             ; popcnt buf
     sub.b   d3,d2             ; total change
-    add.b   d2,(a3)           ; store new col value
-    cmp.b   #0,(a3)           ; clamp
-    bge     .noclamp
-    clr.b   (a3)
-.noclamp:
+    add.b   d2,(a3)+          ; store new col value
     add.w   #4,d0             ; advance history word
     dbra    d5,.inner
-    addq    #1,a3             ; advance column
     dbra    d6,.outer
     add.w   #1,hpos           ; update history position
     and.w   #wsize-1,hpos     ; mod wsize
@@ -1227,7 +1261,7 @@ writepp:
     CNOP    0,4
 setpat: 
     move.w  pattern,d1
-    add.b   d0,d1 
+    add.w   d0,d1 
     cmp.w   #0,d1
     bge     .pos
     add.w   #numpat,d1
@@ -1281,10 +1315,12 @@ randstate:
 .randloop:
     jsr     prng
     move.b  d0,d1
-    lsl.b   #3,d1
-    or.b    d0,d1
-    and.b   #1,d1
-    move.b  d1,(a0)+
+    lsl.b   #2,d1
+    or.b    d1,d0
+    lsl.b   #2,d1
+    or.b    d1,d0 
+    and.b   #1,d0
+    move.b  d0,(a0)+
     dbra    d2,.randloop
     rts
 
