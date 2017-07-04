@@ -8,7 +8,7 @@
 ;-----macro defs-----------
 TEST        SET 1
 ;DEBUG       SET 1
-MODONE      SET 1
+;MODONE      SET 1
 DOINT       SET 1
 
 ;-----screen defs----------
@@ -185,7 +185,7 @@ init:
     move.b  #1,state+16
     bset    #G_RAND,flags2
     ENDC
-    move.w  #14,pattern
+    move.w  #0,pattern
     move.w  pattern,d1
     jsr     loadpat
     jsr     loadscales
@@ -197,14 +197,20 @@ init:
 ;   move.l  #$BFFA2FFA,(a6)+
 ;   move.l  #$E00EB80F,(a6)+
 ;   move.l  #$2FEBEBE9,(a6)+
-    move.l  #%00000000000000000000000101010100,(a6)+
-    move.l  #%00000000000000000000001000000010,(a6)+
-    move.l  #%00000000000000000000000100000100,(a6)+
-    move.l  #%00000000000000000000000010001000,(a6)+
-    move.l  #%00000000000000000000000001010000,(a6)+
+    move.l  #%00000000000000000000011111110000,(a6)+
+    move.l  #%00000000000000000000010000010000,(a6)+
+    move.l  #%00000000000000000000010111010000,(a6)+
+    move.l  #%00000000000000000000011101110000,(a6)+
+    move.l  #%00000000000000000000000000000000,(a6)+
     move.l  #%00000000000000000000000000000000,(a6)+
     move.w  #0,bpos
     jsr     match
+    move.w  mb1,d0
+    sub.w   #1,d0
+    lea     ldstate+2,a0
+    move.w  d0,LDN(a0)
+    bset    #0,LDT(a0)
+    jsr     playlead
     bra     .exit
     ENDC
 
@@ -258,7 +264,7 @@ init:
     move.w  #60,LDS(a6)
     move.w  #6,LDR(a6)
     move.w  #0,LDO(a6)
-    move.w  #7,MDR(a6)
+    move.w  #4,MDR(a6)
     move.b  #0,mode
 
 ;-----setup copper list----
@@ -470,7 +476,7 @@ init:
 .xx:
     movem.l (sp)+,d1-d7/a0-a6
     move.l  mbits1,d0
-    move.w  mb0,d1
+    move.w  mb1,d1
     rts
 
 ;------interrupts----------
@@ -630,7 +636,6 @@ timerint:
     move.l  #CIAB,a0            ; CIA-B base
     btst    #1,CIAICR(a0)       ; timer interrupt
     beq     .exit
-    bset    #G_LDM,flags2       ; request env update
     add.b   #1,count            ; increment count mod countmod
     cmp.b   #countmod,count     ; check for mod divider
     bne     .nomod
@@ -642,6 +647,7 @@ timerint:
     move.b  d0,cpos
     cmp.b   #0,d0
     bne     .exit
+    bset    #G_LDM,flags2       ; request env update
     bset    #F_STEP,flags       ; set step
     btst    #F_MATCH,flags      ; match found on prev data?
     beq     .nomatch
@@ -1086,7 +1092,7 @@ modulate:
     CNOP    0,4
 incpat:
     move.w  pattern,d1
-    add.b   d0,d1 
+    add.w   d0,d1 
     cmp.w   #0,d1
     bge     .pos
     add.w   #numpat,d1
@@ -1639,8 +1645,8 @@ initwav:
     lea     asintab,a1
     lea     wav0,a2
     jsr     wavint
-    lea     sqtab,a0
-    lea     sawtab,a1
+    lea     sintab,a0
+    lea     sqtab,a1
     lea     wav1,a2
     IFD MODONE
     lea wavm1,a2 
@@ -1741,7 +1747,6 @@ playlead:
     add.l   #4,a1
     add.l   #4,a0
     add.l   #wavsize,d1       ; ""
-    add.l   #sclen*2,a2       ; ""
     dbra    d6,.loop
     rts
 
