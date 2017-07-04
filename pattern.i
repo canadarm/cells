@@ -9,7 +9,7 @@ pattern:
 rulesl      equ   1   ; shift for rule index
 rules:
     dc.b    109,0 ;0
-    dc.b    32,0  ;1
+    dc.b    32,1  ;1
     dc.b    150,0 ;2
     dc.b    110,0 ;3
     dc.b    161,0 ;4
