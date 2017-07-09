@@ -1,38 +1,13 @@
-    JUMPPTR init
-    INCDIR  "git/"
-    INCLUDE "wmacro.i"
-    INCLUDE "hwdefs.i"
-
 ;-----macro defs-----------
 ;DEBUG       SET 1
 ;NOGRAPH     SET 1
 ;ONEVOICE    SET 1
 
-;-----screen defs----------
-width       equ 320             ; plane width
-height      equ 200             ; plane height (NTSC)
-size        equ width*height    ; plane size (bits)
-bplwidth    equ width/8         ; width in bytes
-bplsize     equ bplwidth*height ; size in bytes
-bplsizel    equ bplsize/4       ; size in dwords
-bplwidthw   equ bplwidth/2      ; width in words
-bplwidthl   equ bplwidth/4      ; width in dwords
+    INCDIR  "git/"
+    INCLUDE "defs.i"
+    INCLUDE "start.i"
 
 ;-----state defs-----------
-ncellslog   equ 5
-ncells      equ (1<<ncellslog)  ; cell count
-ncellsl     equ (ncells/4)      ; cell count (dwords)
-csizelog    equ 3               ; log2(csize)
-csize       equ (1<<csizelog)   ; cell size (bits)
-csizeb      equ (csize/8)       ; cell size (bytes)
-nstates     equ height/csize    ; number of states
-stwidth     equ ncells*csizeb   ; state size in bytes
-stwidthlog  equ (ncellslog+(csizelog-3))
-stlast      equ stwidth-1       ; last state offset
-stwidthw    equ stwidth/2       ; state size in words
-stwidthl    equ stwidth/4       ; state size in dwords
-stsize      equ stwidth*nstates ; total state size
-stsizel     equ stsize/4        ; total state size in dwords
 wsizelog    equ 3               ; log2(wsize)
 wsize       equ (1<<wsizelog)   ; window size (rows)
 hsize       equ (ncells*wsize)  ; history window size
@@ -51,89 +26,18 @@ F_MOD       equ 4               ; modulate sequence
 F_TRANSP    equ 5               ; transpose root
 F_CLOCK16   equ 6               ; 16 tick event
 F_CLOCK4    equ 7               ; 4 tick event
+
 ;-----flag2 bits-----------
 G_RAND      equ 0               ; randomize next
 G_ONE       equ 1               ; init next
 G_TABMOD    equ 2               ; mod tables next
 G_ERR       equ 7               ; error exit
 
-;-----buffer defs----------
-bsize       equ stwidth*csize           ; render buffer size
-bsizel      equ bsize/4                 ; render buffer size in dwords
-coff        equ (bplwidth-stwidth)/2    ; offset of cell display in bytes
-coffw       equ (bplwidthw-stwidthw)/2  ; offset of cell display in words
-
-;-----color defs-----------
-fgbase      equ $0555
-bgmax       equ $0333
-
 ;-----sequence defs--------
-countmod    equ 128                     ; 16th notes between mode transition
-countz      equ 4                       ; dead states before randomize
-F_DESC      equ 0                       ; descending flag
-F_PERF      equ 1                       ; move to perfect flag
-
-;-----timing defs----------
-; one tick = 1.396825ms (clock interval is 279.365 nanoseconds)
-; .715909 Mhz NTSC; .709379 Mhz PAL
-; PAL 7093,79 ~ 7094 = 10ms   | NTSC 7159,09 ~ 7159 = 10ms
-; 120 bpm = 32dq/s ~ 22371 (NTSC)
-; 60hz ~ 11934 (NTSC)
-period      equ 14800           ; timer interrupt period
-kbhs        equ 96              ; keyboard handshake duration - 02 clocks
+S_DESC      equ 0                       ; descending flag
+S_PERF      equ 1                       ; move to perfect flag
 
 ;-----entry point----------
-; most of the CIA saving is trying
-; to allow asmone to recover after close.
-; however, this is only a convenience issue..
-    SECTION main,CODE
-    CNOP    0,4
-init:
-    movem.l d1-d7/a0-a6,-(sp)
-    move.l  4.w,a6              ; get execbase
-    clr.l   d0                  ; start lib calls
-    move.l  #gfxname,a1     
-    jsr     -552(a6)            ; openlibrary()
-    move.l  d0,gfxbase          ; save result = gfxbase
-    move.l  d0,a6
-    move.l  34(a6),viewport     ; save viewport
-    move.l  38(a6),copsave      ; save copper ptr
-    move.w  _DMACONR,d1         ; save control regs
-    move.w  _INTENAR,d2   
-    move.w  _INTREQR,d3
-    move.w  _ADKCONR,d4
-    movem.l d1-d4,-(sp)         ; save BPL controls
-    move.w  _BPLCON0,d1
-    move.w  _BPLCON1,d2
-    move.w  _BLTCON0,d3
-    move.w  _BLTCON1,d4
-    movem.l d1-d4,-(sp)
-    move.l  #CIAB,a5            ; save CIA-B regs
-    move.b  CIACRA(a5),d2
-    move.b  CIACRB(a5),d3
-    move.b  CIAICR(a5),d4
-    move.b  CIATBLO(a5),d5
-    move.b  CIATBHI(a5),d6
-    movem.l d2-d6,-(sp)
-    move.l  #CIAA,a5            ; save CIA-A regs
-    move.b  CIACRA(a5),d1
-    move.b  CIACRB(a5),d2
-    move.b  CIAICR(a5),d3
-    move.b  CIATBLO(a5),d4
-    move.b  CIATBHI(a5),d5
-    movem.l d1-d5,-(sp)
-    IFND DEBUG
-    move.l  gfxbase,a6          ; load gfxbase
-    move.l  #0,a1               ; graceful exit prep
-    jsr     -222(a6)            ; LoadView
-    jsr     -270(a6)            ; WaitTOF (x2)
-    jsr     -270(a6)      
-    jsr     -456(a6)            ; OwnBlitter
-    jsr     -228(a6)            ; WaitBlit - yes, _after_ own
-    move.l  4.w,a6              ; execbase
-    jsr     -132(a6)            ; Forbid MT
-    ENDC
-
 ;-----init playfield-------
     IFND NOGRAPH
     move.w  #$1200,_BPLCON0     ; 
@@ -347,93 +251,15 @@ init:
     btst    #G_ERR,flags2
     beq     .endmain
     move.w  #$7FFF,_INTENA      ; turn off interrupts
-;.errlp
-;    btst    #6,$bfe001
-;    bne     .errlp
+.errlp
+    btst    #6,$bfe001
+    bne     .errlp
     bra     .exit
 .endmain:
     btst    #6,$bfe001
     bne     .mainloop
 ;-----frame loop end---------
-
-;-----exit code------------
 .exit:
-    IFND DEBUG
-    move.w  #$7FFF,_INTENA      ; turn off interrupts
-    move.l  #CIAB,a6
-    move.l  #CIAA,a5
-    move.b  #$7F,CIAICR(a6)     ; clear CIA-B interrupts
-    move.b  #$7F,CIAICR(a6)     ; ?
-    move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
-    move.b  #$7F,CIAICR(a5)     ; ?
-    bclr.b  #0,CIACRB(a6)       ; stop timer
-    ENDC
-    movem.l (sp)+,d2-d6         ; pop CIA-A regs
-    IFND DEBUG
-    move.b  d2,CIACRA(a5)
-    move.b  d3,CIACRB(a5)
-    or.b    #$80,d4
-    move.b  d4,CIAICR(a5)
-    move.b  d5,CIATBLO(a5)
-    move.b  d6,CIATBHI(a5)
-    ENDC
-    movem.l (sp)+,d2-d6         ; pop CIA-B regs
-    IFND DEBUG
-    move.b  d2,CIACRA(a6)
-    move.b  d3,CIACRB(a6)
-    or.b    #$80,d4
-    move.b  d4,CIAICR(a6)
-    move.b  d5,CIATBLO(a6)
-    move.b  d6,CIATBHI(a6)
-    ENDC
-    movem.l (sp)+,d3-d6         ; pop BPL controls
-    IFND DEBUG
-    move.w  d3,_BPLCON0
-    move.w  d4,_BPLCON1
-    move.w  d5,_BLTCON0
-    move.w  d6,_BLTCON1
-    ENDC
-    movem.l (sp)+,d3-d6         ; pop saved system control regs
-    IFND DEBUG
-    move.w  #$7FFF,_DMACON  
-    or.w    #$8000,d3           ; write bit
-    move.w  d3,_DMACON
-    move.w  #$7FFF,_INTENA      ; disable ints before resotre
-    or.w    #$8000,d4
-    move.l  savelvl2,d0         ; restore lvl2 handler
-    move.l  d0,$68.w
-    move.l  savelvl3,d0         ; restore lvl3 handler
-    move.l  d0,$6C.w
-    move.l  savelvl6,d0         ; restore lvl6 handler
-    move.l  d0,$78.w
-    move.w  d4,_INTENA          ; restore interrupts
-    move.w  #$7FFF,_INTREQ      ; clear pending
-    move.w  #$7FFF,_INTREQ
-    or.w    #$8000,d5
-    move.w  d5,_INTREQ          ; restore reqs
-    move.w  #$7FFF,_ADKCON
-    move.w  #$7FFF,_ADKCON
-    or.w    #$8000,d6
-    move.w  d6,_ADKCON
-    move.l  gfxbase,a6          ; get gfxbase
-    move.l  viewport,a1         ; saved view
-    jsr     -222(a6)            ; LoadView
-    jsr     -270(a6)            ; WaitTOF (x2)
-    jsr     -228(a6)            ; WaitBlit
-    jsr     -462(a6)            ; Disown
-    move.l  copsave,_COP1LCH    ; restore copper
-    ENDC
-    move.l  4.w,a6              ; get execbase
-    move.l  gfxbase,a1          ; gfx ptr
-    jsr     -414(a6)            ; closelibrary
-    IFND DEBUG
-    jsr     -132(a6)            ; permit MT
-    ENDC
-.return:
-.xx:
-    movem.l (sp)+,d1-d7/a0-a6
-    move.l  seqtrig+8,d0
-    move.l  seqtrig+12,d1
     rts
 
 ;------interrupts----------
@@ -486,7 +312,7 @@ vblankint:
     lea     bgpl,a0             ; screen base for copy
     move.w  bplpos,d4           ; offset for copy
     move.w  d4,d5
-    add.w   #coff,d5
+    add.w   #doff,d5
     lea     (a0,d5.w),a1        ; copy address
     lea     cbuf,a0             ; source address
     jsr     copystate
@@ -496,7 +322,7 @@ vblankint:
     addmod  d4,width,bplsize    ; increment
     move.w  d4,bplpos
     move.w  d4,d5
-    add.w   #coff,d5
+    add.w   #doff,d5
     lea     (a0,d5.w),a1        ; render address
     lea     cbuf,a0             ; source address
     jsr     copystate           ; render new state
@@ -1061,7 +887,7 @@ copystate:
     move.l  a1,_BLTDPT        ; set D pointer
     move.l  a0,_BLTAPT        ; set A pointer
     clr.w   _BLTAMOD          ; set A modulo
-    move.w  #coff*2,_BLTDMOD  ; set D modulo 
+    move.w  #doff*2,_BLTDMOD  ; set D modulo 
     move.w  #$09F0,_BLTCON0   ; enable A,D, LF A
     move.l  #stwidthw,d0      ; word count
     move.w  #csize,d1         ; height
@@ -1229,20 +1055,20 @@ modulate:
     move.w  nextmod,d6          ; next mod index
     move.b  mode,d5             ; next mode
     move.w  d6,d0               ; save nextmod for mkseq
-    btst    #F_PERF,modflags    ; test if moving to perfect (0) or next mode
+    btst    #S_PERF,modflags    ; test if moving to perfect (0) or next mode
     beq     .next
     clr.b   d5                  ; use perfect mode
 .next:
     move.b  d5,(a6,d6.w)        ; update mod of next voice
-    btst    #F_DESC,modflags    ; test if descending
+    btst    #S_DESC,modflags    ; test if descending
     bne     .desc
     add.w   #1,d6               ; advance voice
     cmp.w   #ncols,d6           ; check for top
     blt     .done
     move.w  #ncols-1,d6         ; reverse direction 
     move.b  d5,md               ; record mode
-    bset    #F_DESC,modflags    ; set descending
-    bchg    #F_PERF,modflags    ; toggle mode bit
+    bset    #S_DESC,modflags    ; set descending
+    bchg    #S_PERF,modflags    ; toggle mode bit
     bne     .done
     add.b   #1,mode             ; increment mode
     bra     .done
@@ -1252,8 +1078,8 @@ modulate:
     bge     .done
     move.w  #0,d6               ; reverse direction
     move.b  d5,md               ; record mode
-    bclr    #F_DESC,modflags    ; set ascending
-    bchg    #F_PERF,modflags    ; toggle mode bit
+    bclr    #S_DESC,modflags    ; set ascending
+    bchg    #S_PERF,modflags    ; toggle mode bit
     bne     .done
     add.b   #1,mode             ; increment mode
 .done:

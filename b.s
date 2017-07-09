@@ -1,8 +1,3 @@
-    JUMPPTR init
-    INCDIR  "git/"
-    INCLUDE "wmacro.i"
-    INCLUDE "hwdefs.i"
-
 ;-----macro defs-----------
 TEST        SET 1
 ;SHOWCELLS   SET 1
@@ -10,31 +5,11 @@ TEST        SET 1
 ;MODONE      SET 1
 DOINT       SET 1
 
-;-----screen defs----------
-width       equ 320             ; plane width
-height      equ 200             ; plane height (NTSC)
-size        equ width*height    ; plane size (bits)
-bplwidth    equ width/8         ; width in bytes
-bplsize     equ bplwidth*height ; size in bytes
-bplsizel    equ bplsize/4       ; size in dwords
-bplwidthw   equ bplwidth/2      ; width in words
-bplwidthl   equ bplwidth/4      ; width in dwords
+    INCDIR  "git/"
+    INCLUDE "defs.i"
+    INCLUDE "start.i"
 
 ;-----state defs-----------
-ncellslog   equ 5
-ncells      equ (1<<ncellslog)  ; cell count
-ncellsl     equ (ncells/4)      ; cell count (dwords)
-csizelog    equ 3               ; log2(csize)
-csize       equ (1<<csizelog)   ; cell size (bits)
-csizeb      equ (csize/8)       ; cell size (bytes)
-nstates     equ height/csize    ; number of states
-stwidth     equ ncells*csizeb   ; state size in bytes
-stwidthlog  equ (ncellslog+(csizelog-3))
-stlast      equ stwidth-1       ; last state offset
-stwidthw    equ stwidth/2       ; state size in words
-stwidthl    equ stwidth/4       ; state size in dwords
-stsize      equ stwidth*nstates ; total state size
-stsizel     equ stsize/4        ; total state size in dwords
 wsizelog    equ 3               ; log2(wsize)
 wsize       equ (1<<wsizelog)   ; window size (rows)
 hsize       equ wsize*4         ; history window size
@@ -57,15 +32,11 @@ sprsizel    equ (sprsize/4)
 sprsizew    equ (sprsize/2)
 
 ;-----buffer defs----------
-bsize       equ stwidth*csize           ; render buffer size
-bsizel      equ bsize/4                 ; render buffer size in dwords
 coff        equ (bplwidth-sprwidth)/2   ; modulo for patterns in bytes
 coffw       equ (bplwidthw-sprwidthw)/2 ; modulo for patterns in words
-celloff     equ (bplwidth-stwidth)/2    ; cell offset in bytes
-celloffw    equ (bplwidthw-stwidthw)/2  ; cell offset in words
 tsizelog    equ 2
 tsize       equ (1<<tsizelog)
-wavsizelog  equ (tsizelog+6)    ; 6 = tabsizelog
+wavsizelog  equ (tsizelog+6)            ; 6 = tabsizelog
 wavsize     equ (1<<wavsizelog)
 wavsizew    equ (wavsize/2)
 
@@ -76,6 +47,7 @@ F_DATA      equ 2               ; data ready from PPT
 F_DRAW      equ 4               ; match to draw next vblank
 F_MATCH     equ 5               ; match found
 F_ENV       equ 6               ; update envelopes
+
 ;------flag2 bits----------
 G_PLAY      equ 0               ; play note next iter (delay?)
 G_LDM       equ 1               ; modulate lead
@@ -89,78 +61,12 @@ E_ATT       equ 1
 E_DEC       equ 2
 E_REL       equ 3
 
-;-----timing defs----------
-; one tick = 1.396825ms (clock interval is 279.365 nanoseconds)
-; .715909 Mhz NTSC; .709379 Mhz PAL
-; PAL 7093,79 ~ 7094 = 10ms   | NTSC 7159,09 ~ 7159 = 10ms
-; 120 bpm = 32dq/s ~ 22371 (NTSC)
-; 60hz ~ 11934 (NTSC)
-period      equ 14800           ; timer interrupt period
-kbhs        equ 120             ; keyboard handshake duration - 02 clocks
-countmod    equ 64              ; 16th notes between mode transition
-countz      equ 4               ; dead states before randomize
-
 ;-----color defs------------
 ctablog     equ   3
 ctabsize    equ   (1<<ctablog)
 cskip       equ   height/ctabsize
 
 ;-----entry point----------
-; most of the CIA saving is trying
-; to allow asmone to recover after close.
-; however, this is only a convenience issue..
-    SECTION main,CODE
-    CNOP    0,4
-init:
-    movem.l d1-d7/a0-a6,-(sp)
-    move.l  4.w,a6              ; get execbase
-    clr.l   d0                  ; start lib calls
-    move.l  #gfxname,a1     
-    jsr     -552(a6)            ; openlibrary()
-    move.l  d0,gfxbase          ; save result = gfxbase
-    move.l  d0,a6
-    move.l  34(a6),viewport     ; save viewport
-    move.l  38(a6),copsave      ; save copper ptr
-    move.w  _DMACONR,d1         ; save control regs
-    move.w  _INTENAR,d2   
-    move.w  _INTREQR,d3
-    move.w  _ADKCONR,d4
-    movem.l d1-d4,-(sp)
-    move.w  _BPLCON0,d1         ; save BPL controls
-    move.w  _BPLCON1,d2
-    move.w  _BLTCON0,d3
-    move.w  _BLTCON1,d4
-    movem.l d1-d4,-(sp)
-    move.l  #CIAB,a6            ; save CIA-B regs
-    move.b  CIACRA(a6),d2
-    move.b  CIACRB(a6),d3
-    move.b  CIAICR(a6),d4
-    move.b  CIATBLO(a6),d5
-    move.b  CIATBHI(a6),d6
-    movem.l d2-d6,-(sp)
-    move.l  #CIAA,a6            ; save CIA-A regs
-    move.b  CIACRA(a6),d1
-    move.b  CIAICR(a6),d2
-    move.b  CIATBLO(a6),d3
-    move.b  CIATBHI(a6),d4
-    movem.l d1-d4,-(sp)
-    IFND DEBUG
-    move.l  d0,a6               ; load gfxbase
-    move.l  #0,a1               ; graceful exit prep
-    jsr     -222(a6)            ; LoadView
-    jsr     -270(a6)            ; WaitTOF (x2)
-    jsr     -270(a6)      
-    jsr     -456(a6)            ; OwnBlitter
-    jsr     -228(a6)            ; WaitBlit - yes, _after_ own
-    move.l  4.w,a6              ; execbase
-    jsr     -132(a6)            ; Forbid MT
-    ENDC
-    
-;-----init rng-------------
-    IFD TEST
-    jsr     seed
-    ENDC
-
 ;-----init playfield-------
     IFND DEBUG
     move.w  #$2200,_BPLCON0     ; two planes, composite
@@ -177,6 +83,11 @@ init:
     move.w  #$0FFF,_COLOR02     ; fg color (2)
     move.w  #$0FFF,_COLOR03     ; fg color (3)
     move.w  #$0000,_BLTCON1     ; clear BLTCON1
+    ENDC
+
+;-----init rng-------------
+    IFD TEST
+    jsr     seed
     ENDC
 
 ;-----init buffers----------
@@ -391,94 +302,15 @@ init:
     btst    #G_ERR,flags2
     beq     .endmain
     move.w  #$7FFF,_INTENA      ; turn off interrupts
-;.errlp
-;    btst    #6,$bfe001
-;    bne     .errlp
+.errlp
+    btst    #6,$bfe001
+    bne     .errlp
     bra     .exit
 .endmain:
     btst    #6,$bfe001
     bne     .mainloop
 ;-----frame loop end---------
-
-;-----exit code------------
 .exit:
-    IFND DEBUG
-    move.w  #$7FFF,_INTENA      ; turn off interrupts
-    move.l  #CIAA,a5
-    move.l  #CIAB,a6
-    bclr.b  #0,CIACRB(a6)       ; stop timer
-    move.b  #$7F,CIAICR(a6)     ; clear CIA-B interrupts
-    move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
-    ENDIF
-    movem.l (sp)+,d3-d6         ; pop CIA-A regs
-    IFND DEBUG
-    move.b  d3,CIACRA(a5)
-    or.b    #$80,d4         
-    move.b  d4,CIAICR(a5)
-    move.b  d5,CIATBLO(a5)
-    move.b  d6,CIATBHI(a5)
-    ENDC
-    movem.l (sp)+,d5-d6         ; pop CIA-B timer regs
-    IFND DEBUG
-    move.b  d5,CIATBLO(a6)
-    move.b  d6,CIATBHI(a6)
-    ENDC
-    movem.l (sp)+,d3-d5         ; pop CIA-B control regs
-    IFND DEBUG
-    move.b  d3,CIACRA(a6)
-    move.b  d4,CIACRB(a6)
-    or.b    #$80,d5
-    move.b  d5,CIAICR(a6)
-    ENDC
-    movem.l (sp)+,d3-d6         ; pop BPL controls
-    IFND DEBUG
-    move.w  d3,_BPLCON0
-    move.w  d4,_BPLCON1
-    move.w  d5,_BLTCON0
-    move.w  d6,_BLTCON1
-    ENDC
-    movem.l (sp)+,d3-d6         ; pop saved system control regs
-    IFND DEBUG
-    or.w    #$8000,d3           ; write bit
-    move.w  #$7FFF,_DMACON  
-    move.w  d3,_DMACON
-    or.w    #$8000,d4
-    move.w  #$7FFF,_INTENA      ; disable ints before resotre
-    move.l  savelvl2,d0         ; restore lvl2 handler
-    move.l  d0,$68.w
-    move.l  savelvl3,d0         ; restore lvl3 handler
-    move.l  d0,$6C.w
-    move.l  savelvl6,d0         ; restore lvl6 handler
-    move.l  d0,$78.w
-    move.w  d4,_INTENA          ; restore interrupts
-    move.w  #$7FFF,_INTREQ      ; clear pending
-    move.w  #$7FFF,_INTREQ
-    or.w    #$8000,d5
-    move.w  d5,_INTREQ          ; restore reqs
-    or.w    #$8000,d6
-    move.w  #$7FFF,_ADKCON
-    move.w  #$7FFF,_ADKCON
-    move.w  d6,_ADKCON
-    move.l  gfxbase,a6          ; get gfxbase
-    move.l  viewport,a1         ; saved view
-    jsr     -222(a6)            ; LoadView
-    jsr     -270(a6)            ; WaitTOF (x2)
-    jsr     -228(a6)            ; WaitBlit
-    jsr     -462(a6)            ; Disown
-    move.l  copsave,_COP1LCH    ; restore copper
-    ENDC
-    move.l  4.w,a6              ; get execbase
-    move.l  gfxbase,a1          ; gfx ptr
-    jsr     -414(a6)            ; closelibrary
-    IFND DEBUG
-    jsr     -132(a6)            ; permit MT
-    ENDC
-.return:
-.xx:
-    movem.l (sp)+,d1-d7/a0-a6
-    move.w  bplpos,d0
-    move.w  coprpos,d1
-    move.l  dbg,d2
     rts
 
 ;------interrupts----------
@@ -587,7 +419,7 @@ vblankint:
     move.w  bplpos,d4           ; offset for copy
     addmod  d4,width,bplsize    ; increment
     move.w  d4,d5
-    add.w   #celloff,d5
+    add.w   #doff,d5
     lea     (a0,d5.w),a2        ; copy address
     IFD TEST
     IFD SHOWCELLS
@@ -601,7 +433,7 @@ vblankint:
     ENDC
     move.w  d4,bplpos
     move.w  d4,d5 
-    add.w   #celloff,d5
+    add.w   #doff,d5
     lea     (a0,d5.w),a3        ; render address
     IFD TEST
     IFD SHOWCELLS
@@ -617,7 +449,7 @@ vblankint:
     btst    #F_DRAW,flags       ; match to render?
     beq     .nomatch
     bclr    #F_DRAW,flags
-    add.l   #celloff,a1         ; add offset
+    add.l   #doff,a1         ; add offset
     move.l  a1,a4               ; stash
     IFD SHOWCELLS
     sub.l   #patoffset,a3       ; add bg offset
@@ -1618,7 +1450,7 @@ copymem:
 copystate:
     move.w  #stwidthw,d0      ; word count
     move.w  #csize,d1         ; height
-    move.w  #celloff*2,d2     ; D modulo
+    move.w  #doff*2,d2     ; D modulo
     clr.w   d3                ; A modulo
     bra     copymem
 
@@ -1628,7 +1460,7 @@ copystate:
 copyrow:
     move.w  #stwidthw,d0      ; word count
     move.w  #pwidth*csize,d1  ; height
-    move.w  #celloff*2,d2     ; D modulo
+    move.w  #doff*2,d2     ; D modulo
     move.w  d2,d3             ; A modulo
     bra     copymem
 
