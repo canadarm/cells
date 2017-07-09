@@ -112,15 +112,15 @@ init:
     move.b  CIACRA(a5),d2
     move.b  CIACRB(a5),d3
     move.b  CIAICR(a5),d4
-    move.b  CIATALO(a5),d5
-    move.b  CIATAHI(a5),d6
+    move.b  CIATBLO(a5),d5
+    move.b  CIATBHI(a5),d6
     movem.l d2-d6,-(sp)
     move.l  #CIAA,a5            ; save CIA-A regs
     move.b  CIACRA(a5),d1
     move.b  CIACRB(a5),d2
     move.b  CIAICR(a5),d3
-    move.b  CIATALO(a5),d4
-    move.b  CIATAHI(a5),d5
+    move.b  CIATBLO(a5),d4
+    move.b  CIATBHI(a5),d5
     movem.l d1-d5,-(sp)
     IFND DEBUG
     move.l  gfxbase,a6          ; load gfxbase
