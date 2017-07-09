@@ -112,15 +112,15 @@ init:
     move.b  CIACRA(a5),d2
     move.b  CIACRB(a5),d3
     move.b  CIAICR(a5),d4
-    move.b  CIATBLO(a5),d5
-    move.b  CIATBHI(a5),d6
+    move.b  CIATALO(a5),d5
+    move.b  CIATAHI(a5),d6
     movem.l d2-d6,-(sp)
     move.l  #CIAA,a5            ; save CIA-A regs
     move.b  CIACRA(a5),d1
     move.b  CIACRB(a5),d2
     move.b  CIAICR(a5),d3
-    move.b  CIATBLO(a5),d4
-    move.b  CIATBHI(a5),d5
+    move.b  CIATALO(a5),d4
+    move.b  CIATAHI(a5),d5
     movem.l d1-d5,-(sp)
     IFND DEBUG
     move.l  gfxbase,a6          ; load gfxbase
@@ -721,6 +721,8 @@ seqrcnt:
     ds.b    ncols               ; mod counter
 seqdis:
     ds.b    ncols               ; global disable
+volbase:
+    dc.b    80,80,80,80
     EVEN
 nextmod:
     dc.w    0                   ; next voice to modulate
@@ -852,13 +854,15 @@ setseq:
     lea     seqgate,a3
     lea     seqvol,a4
     lea     seqdec,a5
+    lea     volbase,a6
     move.w  #ncols-1,d6     ; loop counter
 .loop:
     move.b  (a0)+,d0        ; count
     move.b  d0,d1
     lsr.b   #2,d1           ; div by 4
-    add.b   #80,d1
-    move.b  d1,(a4)+        ; set vol = c/4 + 80 
+    move.b  (a6)+,d2
+    add.b   d2,d1
+    move.b  d1,(a4)+        ; set vol = c/4 + base (80)
     lsr.b   #3,d0           ; divide by 8
     add.b   #3,d0           ; add 3
     cmp.b   #seqlen,d0      ; saturate  
@@ -1155,19 +1159,31 @@ handlekb:
     bge.b   .row1
 .row0:
     sub.w   #1,d6
+    cmp.w   #8,d6
+    bge     .mod
     lea     seqdis,a1
     and.w   #$03,d6
     eor.b   #1,(a1,d6.w)
-    bra     .done     
+    bra     .done
+.mod:
+    subq.w  #8,d6
+    ble     .dec
+    move.b  #5,d0
+    jsr     chroot
+    bra     .done  
+.dec:
+    move.b  #-5,d0
+    jsr     chroot
+    bra     .done
 .row1:
-    lea     seqdec,a1
+    lea     volbase,a1
     and.w   #$03,d6
-    sub.b   #1,(a1,d6.w)
+    add.b   #4,(a1,d6.w)
     bra     .done
 .row2:
-    lea     seqdec,a1
+    lea     volbase,a1
     and.w   #$03,d6
-    add.b   #1,(a1,d6.w)
+    sub.b   #4,(a1,d6.w)
     bra     .done
 .row3:
     lea     state,a1
@@ -1449,6 +1465,37 @@ doenv:
     add.l   #AUDOFFSET,a1       ; next channel
     addq    #1,a0               ; next track
     dbra    d4,.loop 
+    rts
+
+;-----chroot()----------------
+; update the root note by amt in d0
+    CNOP    0,4
+chroot:
+    move.b  root,d1
+    add.b   d0,d1
+    cmp.b   #0,d1
+    bge     .pos
+.add:
+    add.b   #12,d1
+    cmp.b   #0,d1
+    blt     .add  
+.pos:
+    cmp.b   #12,d1
+    blt     .done
+.sub:
+    sub.b   #12,d1
+    cmp.b   #12,d1
+    bge     .sub
+.done
+    move.b  d1,root
+    move.w  #0,d0
+    jsr     mkseq 
+    move.w  #1,d0
+    jsr     mkseq 
+    move.w  #2,d0
+    jsr     mkseq 
+    move.w  #3,d0
+    jsr     mkseq 
     rts
 
 ;------------------------------------------------------------------------------

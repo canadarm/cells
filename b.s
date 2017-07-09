@@ -361,6 +361,8 @@ init:
     jsr     setpat
     move.b  pmod,d0
     jsr     modulate
+    move.b  proot,d0
+    jsr     chroot
     ENDC
     jsr     match
 .nodata:
@@ -537,6 +539,9 @@ keyint:
     ppack   a0,a1
     move.b  CIAPRB(a0),d0       ; load parallel data
     move.b  d0,pmod             ; store mode
+    ppack   a0,a1
+    move.b  CIAPRB(a0),d0       ; load parallel data
+    move.b  d0,proot            ; store root
     bset    #F_DATA,flags       ; indicate data received
     bset    #F_STEP,flags
     move.w  d6,bpos             ; update position
@@ -741,6 +746,8 @@ ppat:
     dc.b    0                   ; pattern from ppt
 pmod:
     dc.b    0                   ; mode from ppt
+proot:
+    dc.b    0
     EVEN
 audtab:
     dc.w    0, AUDOFFSET*3, AUDOFFSET*1, AUDOFFSET*2
@@ -1886,6 +1893,19 @@ modlead:
     add.l   #wavsize,a0         ; update pointers
     add.l   #wavsize,a1
     dbra    d6,.loop
+    rts
+
+;-----chroot()----------------
+; update the root note to the new value in d0
+; no effect if same
+    CNOP    0,4
+chroot:
+    move.b  root,d1
+    cmp.b   d0,d1
+    beq     .done
+    move.b  d0,root
+    jsr     loadscales
+.done:
     rts
 
 ;------------------------------------------------------------------------------
