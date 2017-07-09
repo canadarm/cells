@@ -2,6 +2,7 @@
 ;DEBUG       SET 1
 ;NOGRAPH     SET 1
 ;ONEVOICE    SET 1
+;PPOUT       SET 1
 
     INCDIR  "git/"
     INCLUDE "defs.i"
@@ -156,10 +157,13 @@ S_PERF      equ 1                       ; move to perfect flag
     move.l  #CIAB,a6            ; CIA-B base
     move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
     move.b  #$7F,CIAICR(a6)     ; clear CIA-B interrupts
+
     IFD PPOUT
     move.b  #$FF,CIADDRB(a5)    ; CIA-A DDRB: ppt output
-    and.b   #$F8,CIADDRA(a6)    ; CIA-B DDRA: set BUSY/POUT/SEL to input
+    and.b   #$F8,CIADDRA(a6)    ; CIA-B DDRA: set BUSY/POUT/SEL to input (reset)
+    or.b    #$07,CIAPRA(a6)     ; CIA-B DDRA: init all high
     ENDC 
+
     move.b  #$18,CIACRA(a5)     ; CIA-A TA: one-shot, KB input mode
     and.b   #$80,CIACRA(a6)     ; CIA-B TB: continuous, pulse, PB6OFF
     or.b    #$10,CIACRB(a6)     ;
@@ -167,15 +171,13 @@ S_PERF      equ 1                       ; move to perfect flag
     move.b  #(period>>8),CIATBHI(a6)  ; ..for timer interrupt
     move.b  #(kbhs&$FF),CIATBLO(a5)   ; set CIA-A timer B period
     move.b  #(kbhs>>8),CIATBHI(a5)    ; .. for kb handshake
+
     move.l  #keyint,$68.w       ; install lvl2 handler (cia-a)
     move.l  #vblankint,$6C.w    ; install lvl3 handler
     move.l  #timerint,$78.w     ; install lvl6 handler (cia-b)
     move.b  #$88,CIAICR(a5)     ; enable CIA-A SP interrupt (keyboard)
     IFND PPOUT
     move.b  #$82,CIAICR(a6)     ; enable CIA-B TB interrupt
-    ENDC
-    IFD PPOUT
-    move.b  #$92,CIAICR(a6)     ; enable CIA-B TB/flag interrupt
     ENDC
     move.w  #$E028,_INTENA      ; enable lvl2/3/6
     bset.b  #0,CIACRB(a6)       ; start CIA-B TB
@@ -254,7 +256,7 @@ S_PERF      equ 1                       ; move to perfect flag
 ;------interrupts----------
 
 keyint:
-    movem.l d0-d7/a0-a6,-(sp)
+    movem.l d0-d6/a0-a6,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #3,d0               ; PORTS handler
     beq     .exit
@@ -276,13 +278,13 @@ keyint:
     beq     .handshake
     and.b   #$BF,CIACRA(a0)     ; set input mode
 .exit:
-    move.w  #$4008,_INTREQ      ; clear INTREQ
-    move.w  #$4008,_INTREQ      ; ... twice
-    movem.l (sp)+,d0-d7/a0-a6
+    move.w  #$0008,_INTREQ      ; clear INTREQ
+    move.w  #$0008,_INTREQ      ; ... twice
+    movem.l (sp)+,d0-d6/a0-a6
     rte
     
 vblankint:
-    movem.l d0-d7/a0-a6,-(sp)
+    movem.l d0-d6/a0-a6,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #5,d0               ; VBLANK handler
     beq     .exit
@@ -318,13 +320,13 @@ vblankint:
 .nodraw:
     bset    #F_ENV,flags
 .exit:
-    move.w  #$4020,_INTREQ      ; clear INTREQ
-    move.w  #$4020,_INTREQ      ; ... twice
-    movem.l (sp)+,d0-d7/a0-a6
+    move.w  #$0020,_INTREQ      ; clear INTREQ
+    move.w  #$0020,_INTREQ      ; ... twice
+    movem.l (sp)+,d0-d6/a0-a6
     rte
 
 timerint:
-    movem.l d0-d7/a0-a6,-(sp)
+    movem.l d0-d6/a0-a6,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     and.w   #$2000,d0           ; PORTS handler
     beq     .exit
@@ -362,9 +364,9 @@ timerint:
     bset    #F_UPDATE,flags
 .done 
 .exit:
-    move.w  #$6000,_INTREQ      ; clear INTREQ
-    move.w  #$6000,_INTREQ      ; ... twice
-    movem.l (sp)+,d0-d7/a0-a6
+    move.w  #$2000,_INTREQ      ; clear INTREQ
+    move.w  #$2000,_INTREQ      ; ... twice
+    movem.l (sp)+,d0-d6/a0-a6
     rte
 
 ;-----tables---------------
@@ -1116,25 +1118,38 @@ pack:
 ; TODO: poll ACK line between writes..
     CNOP    0,4
 writepp:
-    lea     packed,a6         ; packed data (dword)
-    move.l  #CIAA,a5          ; get CIAA base
-    move.l  #CIAB,a4          ; get CIAB base
-    move.b  #$FF,CIADDRB(a5)  ; set bits to output
-    move.b  (a6)+,d0          
-    move.b  d0,CIAPRB(a5)     ; write byte  
-    ppwait  a5,a4
-    move.b  (a6)+,d0          
-    move.b  d0,CIAPRB(a5)     ; write byte  
-    ppwait  a5,a4
-    move.b  (a6)+,d0          
-    move.b  d0,CIAPRB(a5)     ; write byte  
-    ppwait  a5,a4
-    move.b  (a6)+,d0          
-    move.b  d0,CIAPRB(a5)     ; write byte  
-    ppwait  a5,a4
-    move.b  pat,CIAPRB(a5)    ; write pattern
-    ppwait  a5,a4
-    move.b  md,CIAPRB(a5)     ; write mode
+    lea     packed,a6               ; packed data (dword)
+    move.l  #CIAA,a5                ; get CIAA base
+    move.l  #CIAB,a4                ; get CIAB base
+    move.w  #$4000,_INTENA          ; turn off ints
+    move.b  (a6)+,d0                ; write state
+    jsr     writepb
+    move.b  (a6)+,d0
+    jsr     writepb
+    move.b  (a6)+,d0
+    jsr     writepb
+    move.b  (a6)+,d0
+    jsr     writepb
+    move.b  mode,d0                 ; write mode,root,pat
+    jsr     writepb
+    move.b  root,d0
+    jsr     writepb 
+    move.b  pat,d0
+    jsr     writepb
+    move.w  #$C000,_INTENA          ; re-enable ints
+    rts
+
+writepb:
+    move.b  d0,CIAPRB(a4)           ; write data
+    bset.b  #2,CIADDRA(a5)          ; set CTL to output
+    bclr.b  #2,CIAPRA(a5)           ; pulse CTL (int)
+    bset.b  #2,CIAPRA(a5)
+    bset.b  #1,CIADDRA(a5)          ; set valid to output (send)
+    bclr.b  #1,CIAPRA(a5)           ; pull valid low (trigger ack)
+.w1 btst.b  #0,CIAPRA(a5)	          ; busy wait on ack
+    bne	    .w1
+    and.b   #$F8,CIADDRA(a5)	      ; set controls to input (reset)
+    or.b    #7,CIAPRA(a5)	          ; reset
     rts
 
 ;-----setpat(d0)----------------

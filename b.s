@@ -66,6 +66,11 @@ ctablog     equ   3
 ctabsize    equ   (1<<ctablog)
 cskip       equ   height/ctabsize
 
+;-----ppt defs-------------
+pptb        equ   4             ; buffer element count
+pptd        equ   3             ; data element count
+pptn        equ   (pptb+pptd)   ; total element count
+
 ;-----entry point----------
 ;-----init playfield-------
     IFND DEBUG
@@ -257,12 +262,12 @@ cskip       equ   height/ctabsize
     beq     .nodata
     bclr    #F_DATA,flags
     IFND TEST
-    move.b  ppat,d0
-    jsr     setpat
     move.b  pmod,d0
     jsr     modulate
     move.b  proot,d0
     jsr     chroot
+    move.b  ppat,d0
+    jsr     setpat
     ENDC
     jsr     match
 .nodata:
@@ -304,7 +309,7 @@ cskip       equ   height/ctabsize
 
 ;------interrupts----------
 keyint:
-    movem.l d6/a0-a2,-(sp)
+    movem.l d2-d6/a0-a2,-(sp)
     move.w  _INTREQR,d0         ; check req mask
     btst    #3,d0               ; PORTS handler
     beq     .exit
@@ -312,6 +317,7 @@ keyint:
     btst    #4,CIAICR(a0)       ; test FLAG bit (ppt)
     bne     .ppt
     ENDC
+    IFD TEST
     move.l  #CIAA,a0            ; CIA-A base
     btst    #3,CIAICR(a0)       ; test SP bit (kb)
     beq     .exit
@@ -329,48 +335,53 @@ keyint:
     and.b   CIAICR(a0),d6
     beq     .handshake
     and.b   #$BF,CIACRA(a0)     ; set input mode
+    ENDC
     IFND TEST
     bra     .exit
 .ppt:
+    move.l  #CIAA,a0
+    move.l  #CIAB,a1
+    move.b  ppos,d2             ; get count
+    cmp.b   #pptb,d2            ; read buffer?
+    bge     .pptd               ; no, read data
     lea     buf,a2
     move.w  bpos,d6
-    move.l  #CIAB,a1            ; CIA-A base
+.w1 btst.b  #1,CIAPRA(a1)       ; busy wait valid low
+    bne     .w1
     move.b  CIAPRB(a0),d0       ; load parallel data
     move.b  d0,(a2,d6.w)        ; store state
-    ppack   a0,a1
+    bset.b  #1,CIAPRA(a1)       ; reset valid
+    bset.b  #0,CIADDRA(a1)      ; set ack to output
+    bclr.b  #0,CIAPRA(a1)       ; pull ack low
     add.w   #1,d6               ; increment position
     and.w   #$1F,d6             ; mod 4*window size
-    move.b  CIAPRB(a0),d0       ; load parallel data
-    move.b  d0,(a2,d6.w)        ; store state
-    ppack   a0,a1
-    add.w   #1,d6               ; increment position
-    and.w   #$1F,d6             ; mod 4*window size
-    move.b  CIAPRB(a0),d0       ; load parallel data
-    move.b  d0,(a2,d6.w)        ; store state
-    ppack   a0,a1
-    add.w   #1,d6               ; increment position
-    and.w   #$1F,d6             ; mod 4*window size
-    move.b  CIAPRB(a0),d0       ; load parallel data
-    move.b  d0,(a2,d6.w)        ; store state
-    ppack   a0,a1
-    add.w   #1,d6               ; increment position
-    and.w   #$1F,d6             ; mod 4*window size
-    move.b  CIAPRB(a0),d0       ; load parallel data
-    move.b  d0,ppat             ; store pattern
-    ppack   a0,a1
-    move.b  CIAPRB(a0),d0       ; load parallel data
-    move.b  d0,pmod             ; store mode
-    ppack   a0,a1
-    move.b  CIAPRB(a0),d0       ; load parallel data
-    move.b  d0,proot            ; store root
-    bset    #F_DATA,flags       ; indicate data received
-    bset    #F_STEP,flags
     move.w  d6,bpos             ; update position
+    bra     .ppdone
+.pptd:
+    lea     pdata,a2            ; param address
+    ext.w   d2                  ; to index
+.w2 btst.b  #1,CIAPRA(a1)       ; busy wait valid low
+    bne     .w2
+    move.b  CIAPRB(a0),d0       ; load parallel data
+    move.b  d0,(a2,d2.w)        ; store parameter
+    bset.b  #1,CIAPRA(a1)       ; reset valid
+    bset.b  #0,CIADDRA(a1)      ; set ack to output
+    bclr.b  #0,CIAPRA(a1)       ; pull ack low
+.ppdone:
+    and.b   #$F8,CIADDRA(a1)    ; set all input (reset)
+    or.b    #$7,CIAPRA(a1)      ; reset valid, ack to high
+    add.b   #1,d2               ; increment 
+    cmp.b   #pptn,d2            ; test
+    blt     .nopp
+    clr.b   d2                  ; reset
+    bset    #F_DATA,flags       ; indicate data ready
+.nopp:
+    move.b  d2,ppos             ; update position
     ENDC
 .exit:
-    move.w  #$4008,_INTREQ
-    move.w  #$4008,_INTREQ
-    movem.l (sp)+,d6/a0-a2
+    move.w  #$0008,_INTREQ
+    move.w  #$0008,_INTREQ
+    movem.l (sp)+,d2-d6/a0-a2
     rte
 
 vblankint:
@@ -471,8 +482,8 @@ vblankint:
 .nomatch:
 .nostep:
 .exit:
-    move.w  #$4020,_INTREQ      ; clear INTREQ
-    move.w  #$4020,_INTREQ      ; ... twice
+    move.w  #$0020,_INTREQ      ; clear INTREQ
+    move.w  #$0020,_INTREQ      ; ... twice
     movem.l (sp)+,d0-d6/a0-a6
     rte
 
@@ -529,8 +540,8 @@ timerint:
     jsr     nextstate
     ENDC
 .exit:
-    move.w  #$6000,_INTREQ      ; clear INTREQ
-    move.w  #$6000,_INTREQ      ; ... twice
+    move.w  #$2000,_INTREQ      ; clear INTREQ
+    move.w  #$2000,_INTREQ      ; ... twice
     movem.l (sp)+,d0-d6/a0-a3
     rte
 
@@ -563,12 +574,16 @@ dbgx:
     dc.w    0
 dbgt:
     dc.w    0
-ppat:
-    dc.b    0                   ; pattern from ppt
+ppos:
+    dc.b    0                   ; ppt read position
+pdata:
+    dc.b    0, 0, 0, 0          ; padding
 pmod:
     dc.b    0                   ; mode from ppt
-proot:
-    dc.b    0
+proot:                  
+    dc.b    0                   ; root from ppt
+ppat:
+    dc.b    0                   ; pattern from ppt
     EVEN
 audtab:
     dc.w    0, AUDOFFSET*3, AUDOFFSET*1, AUDOFFSET*2
