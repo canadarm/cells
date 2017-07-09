@@ -149,20 +149,9 @@ S_PERF      equ 1                       ; move to perfect flag
     ENDC
     ENDC
 
-;-----install ints---------
-    move.l  $68.w,d0            ; save lvl2 handler
-    move.l  d0,savelvl2
-    move.l  $6C.w,d0            ; save lvl3 handler
-    move.l  d0,savelvl3
-    move.l  $78.w,d0            ; save lvl6 handler
-    move.l  d0,savelvl6
-
 ;-----system setup---------
     IFND DEBUG
     waitr   a1,d0,d1,d2
-    move.w  #$7fff,_INTENA      ; disable all bits in INTENA
-    move.w  #$6028,_INTREQ      ; clear pending lvl2/3/6 
-    move.w  #$6028,_INTREQ      ; ... twice
     move.l  #CIAA,a5            ; CIA-A base
     move.l  #CIAB,a6            ; CIA-B base
     move.b  #$7F,CIAICR(a5)     ; clear CIA-A interrupts
