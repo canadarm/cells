@@ -1,5 +1,5 @@
 ;-----macro defs-----------
-TEST        SET 1
+;TEST        SET 1
 ;SHOWCELLS   SET 1
 ;DEBUG       SET 1
 ;MODONE      SET 1
@@ -220,8 +220,8 @@ pptn        equ   (pptb+pptd)   ; total element count
     move.b  #$18,CIACRA(a5)     ; CIA-A TA: one-shot, KB input mode
     IFND TEST
     move.b  #$00,CIADDRB(a5)    ; CIA-A DDRB: ppt input
-    or.b    #$01,CIADDRA(a6)    ; CIA-B DDRA: set BUSY to output
-    and.b   #$FB,CIADDRA(a6)    ; CIA-B DDRA: set SEL to input
+    and.b   #$F8,CIADDRA(a6)    ; CIA-B DDRA: ctl input (reset)
+    or.b    #$07,CIAPRA(a6)	; CIA-B PRA: all ctl high
     ENDC
     IFD TEST
     and.b   #$80,CIACRB(a6)     ; CIA-B TB: continuous, pulse, PB6OFF
@@ -241,7 +241,7 @@ pptn        equ   (pptb+pptd)   ; total element count
     bset.b  #0,CIACRB(a6)       ; start CIA-B TB
     ENDC
     IFND TEST
-    move.b  #$98,CIAICR(a5)     ; enable CIA-A FLG/SP interrupt (keyboard)
+    move.b  #$90,CIAICR(a5)     ; enable CIA-A FLG/SP interrupt (keyboard)
     move.w  #$C028,_INTENA      ; enable lvl2/3
     ENDC
     waitr   a1,d0,d1,d2
@@ -261,6 +261,7 @@ pptn        equ   (pptb+pptd)   ; total element count
     btst    #F_DATA,flags
     beq     .nodata
     bclr    #F_DATA,flags
+;    add.l   #$10000,dbg
     IFND TEST
     move.b  pmod,d0
     jsr     modulate
@@ -270,6 +271,9 @@ pptn        equ   (pptb+pptd)   ; total element count
     jsr     setpat
     ENDC
     jsr     match
+    btst    #F_MATCH,flags
+    beq     .nodata
+    add.l   #$1,dbg
 .nodata:
     btst    #F_ENV,flags
     beq     .noenv
@@ -305,21 +309,24 @@ pptn        equ   (pptb+pptd)   ; total element count
     bne     .mainloop
 ;-----frame loop end---------
 .exit:
+    move.l  dbg,d6
     rts
 
 ;------interrupts----------
 keyint:
-    movem.l d2-d6/a0-a2,-(sp)
-    move.w  _INTREQR,d0         ; check req mask
+    movem.l d1-d6/a0-a4,-(sp)
+    move.w  _INTREQR,d0
     btst    #3,d0               ; PORTS handler
     beq     .exit
+    move.l  #CIAA,a0
+    move.l  #CIAB,a1
     IFND TEST
-    btst    #4,CIAICR(a0)       ; test FLAG bit (ppt)
+    btst.b  #4,CIAICR(a0)       ; test FLAG bit (ppt)
     bne     .ppt
+    bra     .exit
     ENDC
     IFD TEST
-    move.l  #CIAA,a0            ; CIA-A base
-    btst    #3,CIAICR(a0)       ; test SP bit (kb)
+    btst.b  #3,CIAICR(a0)       ; test SP bit (kb)
     beq     .exit
     move.b  CIASDR(a0),d6       ; load serial data
     or.b    #$01,CIACRB(a0)     ; start CIA-A TB (one shot)
@@ -339,8 +346,7 @@ keyint:
     IFND TEST
     bra     .exit
 .ppt:
-    move.l  #CIAA,a0
-    move.l  #CIAB,a1
+;   add.l   #1,dbg
     move.b  ppos,d2             ; get count
     cmp.b   #pptb,d2            ; read buffer?
     bge     .pptd               ; no, read data
@@ -374,14 +380,42 @@ keyint:
     cmp.b   #pptn,d2            ; test
     blt     .nopp
     clr.b   d2                  ; reset
-    bset    #F_DATA,flags       ; indicate data ready
+    bset    #F_STEP,flags       ; indicate step
+    bset    #G_LDM,flags2       ; request env update
+    btst    #F_MATCH,flags      ; match found on prev data?
+    beq     .nomatch
+    bclr    #F_MATCH,flags
+    lea     ldstate,a0
+    clr.w   d1
+    move.w  mb0,d0
+    move.w  d0,mx0
+    clr.w   mb0
+    subq.w  #1,d0 
+    blt     .nomatch0
+    move.w  d0,LDN(a0,d1.w)     ; set note
+    bset    #0,LDT(a0,d1.w)     ; set trigger
+    bset    #F_DRAW,flags       ; request pattern draw
+    bset    #G_PLAY,flags2
+.nomatch0:
+    add.w   #2,d1
+    move.w  mb1,d0
+    move.w  d0,mx1
+    clr.w   mb1
+    subq.w  #1,d0 
+    blt     .nomatch1
+    move.w  d0,LDN(a0,d1.w)     ; set note
+    bset    #0,LDT(a0,d1.w)     ; set trigger
+    bset    #F_DRAW,flags       ; request pattern draw
+    bset    #G_PLAY,flags2
+.nomatch1:
+.nomatch:
 .nopp:
     move.b  d2,ppos             ; update position
     ENDC
 .exit:
-    move.w  #$0008,_INTREQ
-    move.w  #$0008,_INTREQ
-    movem.l (sp)+,d2-d6/a0-a2
+    move.w  #$4008,_INTREQ
+    move.w  #$4008,_INTREQ
+    movem.l (sp)+,d1-d6/a0-a4
     rte
 
 vblankint:
@@ -393,6 +427,7 @@ vblankint:
     btst    #F_STEP,flags
     beq     .nostep
     bclr    #F_STEP,flags
+   add.l #$1000,dbg
     bset    #F_DATA,flags       ; data ready for next match
     lea     bgpl,a0             ; get screen base
     move.w  coprpos,d5          ; get copper offset
@@ -427,9 +462,9 @@ vblankint:
     move.l  a2,a1               ; copy address
     jsr     copystate           ; copy state
     lea     bgplhi,a0           ; screen base for render
-    ELSE
-    lea     bgplhi0,a0
     ENDC
+    ELSE
+    lea	    bgplhi0,a0
     ENDC
     move.w  d4,bplpos
     move.w  d4,d5 
@@ -449,7 +484,7 @@ vblankint:
     btst    #F_DRAW,flags       ; match to render?
     beq     .nomatch
     bclr    #F_DRAW,flags
-    add.l   #doff,a1         ; add offset
+    add.l   #doff,a1            ; add offset
     move.l  a1,a4               ; stash
     IFD SHOWCELLS
     sub.l   #patoffset,a3       ; add bg offset
@@ -566,14 +601,6 @@ pos:
     dc.w    0
 dbg:  
     dc.l    0
-dbgn:
-    dc.w    0
-dbgo:
-    dc.w    0
-dbgx:
-    dc.w    0
-dbgt:
-    dc.w    0
 ppos:
     dc.b    0                   ; ppt read position
 pdata:
@@ -1433,7 +1460,8 @@ drawstate:
     dbra    d0,.copyloop
     dbra    d1,.copyout
     rts 
-
+    ENDC
+    
     CNOP    0,4
 copymem:
     waitblt
@@ -1467,8 +1495,6 @@ copyrow:
     move.w  #doff*2,d2     ; D modulo
     move.w  d2,d3             ; A modulo
     bra     copymem
-
-    ENDC
 
 ;-----wavcopy(a0,a1)--------
 ; copy wave data at a1 into a0.

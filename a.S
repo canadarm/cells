@@ -2,7 +2,7 @@
 ;DEBUG       SET 1
 ;NOGRAPH     SET 1
 ;ONEVOICE    SET 1
-;PPOUT       SET 1
+PPOUT       SET 1
 
     INCDIR  "git/"
     INCLUDE "defs.i"
@@ -176,9 +176,7 @@ S_PERF      equ 1                       ; move to perfect flag
     move.l  #vblankint,$6C.w    ; install lvl3 handler
     move.l  #timerint,$78.w     ; install lvl6 handler (cia-b)
     move.b  #$88,CIAICR(a5)     ; enable CIA-A SP interrupt (keyboard)
-    IFND PPOUT
     move.b  #$82,CIAICR(a6)     ; enable CIA-B TB interrupt
-    ENDC
     move.w  #$E028,_INTENA      ; enable lvl2/3/6
     bset.b  #0,CIACRB(a6)       ; start CIA-B TB
     waitr   a1,d0,d1,d2
@@ -251,6 +249,7 @@ S_PERF      equ 1                       ; move to perfect flag
     bne     .mainloop
 ;-----frame loop end---------
 .exit:
+    move.l  dbg,d6
     rts
 
 ;------interrupts----------
@@ -362,6 +361,7 @@ timerint:
     cmp.b   #0,d0
     bne.b   .done
     bset    #F_UPDATE,flags
+    add.l   #$1000,dbg
 .done 
 .exit:
     move.w  #$2000,_INTREQ      ; clear INTREQ
@@ -473,22 +473,6 @@ popcnt:
     EVEN
 dbg:
     dc.l    0
-dbg2:
-    dc.l    0
-savelvl2:
-    dc.l    0                   ; saved lvl2 handler
-savelvl3:
-    dc.l    0                   ; saved lvl3 handler
-savelvl6:
-    dc.l    0                   ; saved lvl6 handler
-gfxbase:
-    dc.l    0
-viewport:
-    dc.l    0
-copsave:
-    dc.l    0
-gfxname:
-    dc.b    "graphics.library",0
 
 ;-----cell state-----------
     SECTION cellst,BSS_F
@@ -583,8 +567,6 @@ copptrh:
     dc.w    0
 coplist:
     dcb.l   64, CL_END
-;   dc.w    $C801,$FF00     ; wait for line 200
-;   dc.w    INTREQ_,$8010   ; trigger lvl3 irq
 
 ;-----bitplanes------------
     SECTION planes,BSS_C
@@ -1118,24 +1100,28 @@ pack:
 ; TODO: poll ACK line between writes..
     CNOP    0,4
 writepp:
+  add.l #1,dbg
     lea     packed,a6               ; packed data (dword)
-    move.l  #CIAA,a5                ; get CIAA base
-    move.l  #CIAB,a4                ; get CIAB base
+    move.l  #CIAA,a4                ; get CIAA base
+    move.l  #CIAB,a5                ; get CIAB base
     move.w  #$4000,_INTENA          ; turn off ints
     move.b  (a6)+,d0                ; write state
     jsr     writepb
+;  bra .done
     move.b  (a6)+,d0
     jsr     writepb
     move.b  (a6)+,d0
     jsr     writepb
     move.b  (a6)+,d0
     jsr     writepb
+;  bra .done
     move.b  mode,d0                 ; write mode,root,pat
     jsr     writepb
     move.b  root,d0
     jsr     writepb 
     move.b  pat,d0
     jsr     writepb
+.done:
     move.w  #$C000,_INTENA          ; re-enable ints
     rts
 
@@ -1144,12 +1130,16 @@ writepb:
     bset.b  #2,CIADDRA(a5)          ; set CTL to output
     bclr.b  #2,CIAPRA(a5)           ; pulse CTL (int)
     bset.b  #2,CIAPRA(a5)
+    move.b  d0,CIAPRB(a4)
     bset.b  #1,CIADDRA(a5)          ; set valid to output (send)
     bclr.b  #1,CIAPRA(a5)           ; pull valid low (trigger ack)
-.w1 btst.b  #0,CIAPRA(a5)	          ; busy wait on ack
+.w1 btst.b  #0,CIAPRA(a5)           ; busy wait on ack
     bne	    .w1
-    and.b   #$F8,CIADDRA(a5)	      ; set controls to input (reset)
-    or.b    #7,CIAPRA(a5)	          ; reset
+    and.b   #$F8,CIADDRA(a5)	    ; set controls to input (reset)
+    or.b    #7,CIAPRA(a5)	    ; reset
+    REPT 1
+    tst.b   CIADDRA(a4)             ; delay
+    ENDR
     rts
 
 ;-----setpat(d0)----------------

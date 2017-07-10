@@ -57,10 +57,18 @@ start:
 
     IFND DEBUG
     move.w  #$7FFF,_INTENA      ; turn off interrupts
-    jsr     AllocMiscResources  ; own ppt
     ENDC
     movem.l a2-a6,-(sp)         ; save system ptrs
+    move.w  #15,d6
+.getppt
+    jsr     AllocMiscResources  ; own ppt
+    bne     .ownppt
+    dbra    d6,.getppt
+    bra     .noppt
+.ownppt:
     jsr     main                ; call main routine
+    jsr     FreeMiscResources
+.noppt:
     movem.l (sp)+,a2-a6         ; restore
 
     IFND DEBUG
@@ -68,7 +76,6 @@ start:
     move.b  #$7F,CIAICR(a2)     ; clear CIA-A interrupts
     move.b  #$7F,CIAICR(a3)     ; clear CIA-B interrupts
     bclr.b  #0,CIACRB(a3)       ; stop timer b
-    jsr     FreeMiscResources
     ENDC
 
     IFND DEBUG
@@ -134,14 +141,14 @@ start:
 
 AllocMiscResources:
     jsr     OpenMiscResource
-    beq     .done
+    beq     .end
     move.l  #2,d0       ; get parallel port
     move.l  #-1,a1
     jsr     -6(a6)
     move.l  #3,d0       ; get parallel bits
     move.l  #-1,a1
     jsr     -6(a6)
-.done:
+.end:
     rts 
    
 FreeMiscResources:
@@ -155,13 +162,15 @@ FreeMiscResources:
     rts
 
     ; set Z flag on failure
-    ; save in MiscRes
+    ; return in d0,a6, save in MiscRes
 OpenMiscResource:
+    move.l  4.w,a6
     move.l  .MiscRes(pc),d0
     bne     .omr10
     lea     .MiscName(pc),a1
     jsr     -498(a6)          ; LVOOpenResource
 .omr10:
+    move.l  d0,a6             ; save in a6
     tst.l   d0
     rts
 
