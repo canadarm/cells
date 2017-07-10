@@ -1100,22 +1100,19 @@ pack:
 ; TODO: poll ACK line between writes..
     CNOP    0,4
 writepp:
-  add.l #1,dbg
     lea     packed,a6               ; packed data (dword)
     move.l  #CIAA,a4                ; get CIAA base
     move.l  #CIAB,a5                ; get CIAB base
     move.w  #$4000,_INTENA          ; turn off ints
     move.b  (a6)+,d0                ; write state
     jsr     writepb
-;  bra .done
     move.b  (a6)+,d0
     jsr     writepb
     move.b  (a6)+,d0
     jsr     writepb
     move.b  (a6)+,d0
     jsr     writepb
-;  bra .done
-    move.b  mode,d0                 ; write mode,root,pat
+    move.b  md,d0                   ; write mode,root,pat
     jsr     writepb
     move.b  root,d0
     jsr     writepb 
@@ -1135,8 +1132,8 @@ writepb:
     bclr.b  #1,CIAPRA(a5)           ; pull valid low (trigger ack)
 .w1 btst.b  #0,CIAPRA(a5)           ; busy wait on ack
     bne	    .w1
-    and.b   #$F8,CIADDRA(a5)	    ; set controls to input (reset)
-    or.b    #7,CIAPRA(a5)	    ; reset
+    and.b   #$F8,CIADDRA(a5)	      ; set controls to input (reset)
+    or.b    #7,CIAPRA(a5)	          ; reset
     REPT 1
     tst.b   CIADDRA(a4)             ; delay
     ENDR

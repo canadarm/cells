@@ -3,7 +3,7 @@
 ;SHOWCELLS   SET 1
 ;DEBUG       SET 1
 ;MODONE      SET 1
-DOINT       SET 1
+;NOINT       SET 1
 
     INCDIR  "git/"
     INCLUDE "defs.i"
@@ -589,7 +589,7 @@ timerint:
 ;------saves/system--------
     SECTION state,DATA_F
     CNOP    0,4
-flags: ;$2679A4
+flags:
     dc.w    0                   ; state flags
 flags2:
     dc.w    0                   ; state flags
@@ -599,8 +599,6 @@ bpos:
     dc.w    0                   ; buffer position
 pos:
     dc.w    0
-dbg:  
-    dc.l    0
 ppos:
     dc.b    0                   ; ppt read position
 pdata:
@@ -615,27 +613,16 @@ ppat:
 audtab:
     dc.w    0, AUDOFFSET*3, AUDOFFSET*1, AUDOFFSET*2
 
+;-----system---------------
     SECTION saves,DATA
     CNOP    0,4
-savelvl2:
-    dc.l    0                   ; saved lvl2 handler
-savelvl3:
-    dc.l    0                   ; saved lvl3 handler
-savelvl6:
-    dc.l    0                   ; saved lvl6 handler
-gfxbase:
+dbg:  
     dc.l    0
-viewport:
-    dc.l    0
-copsave:
-    dc.l    0
-gfxname:
-    dc.b    "graphics.library",0
   
 ;-----locals---------------
     SECTION pos,DATA_F
     CNOP    0,4
-bplpos: ;$2679D0
+bplpos:
     dc.w    0                   ; bitplane offset for render
 coprpos:
     dc.w    0                   ; copper offset  
@@ -645,7 +632,7 @@ drawpos:
     EVEN
 cpos:
     dc.b    0                   ; scroll position mod 8
-count: ;$2679D9
+count:
     dc.b    0                   ; step counter
 
 ;-----wave buffers---------
@@ -695,8 +682,6 @@ mb0:
     dc.w    0                   ; match index 0 (buffer)
 mb1:
     dc.w    0                   ; match index 1 (buffer)
-ptmp:
-    dc.w    0
 
 ;-----cell state-----------
     IFD TEST
@@ -706,13 +691,13 @@ rule:
     dc.w    0
 zeros:
     dc.b    0
-    ENDC 
     SECTION cstate,BSS
     CNOP    0,4
 state:
     ds.b    stsize
 newstate:
     ds.b    ncells
+    ENDC 
 
 ;-----leads data-----------
     SECTION scales,DATA_f
@@ -811,9 +796,12 @@ fgpl:
     ds.b    (bplsize-patoffset)
 fgpl0:
     ds.b    (patoffset+width)
+
+    IFD TEST
     CNOP    0,4
 cbuf:
     ds.b    stwidth*csize     ; state display buffer
+    ENDC
 
 ;-----color tables---------
     SECTION amd,DATA
@@ -866,12 +854,12 @@ loadpat:
 .posa:
     move.b  (a5,d3.w),d5
     and.b   (a5,d3.w),d4        ; and with mask
-    move.b  d4,ptmp             ; stash 
+    move.b  d4,.ptmp            ; stash 
     clr.w   d5                  ; line counter
     move.w  #pwidth-1,d5        ; loop counter/bit
 .expa:
     clr.b   d4
-    btst    d5,ptmp             ; test pattern bit
+    btst    d5,.ptmp            ; test pattern bit
     beq     .offa
     move.b  #$7E,d4
 .offa:
@@ -904,12 +892,12 @@ loadpat:
 .posb:
     move.b  (a5,d3.w),d5
     and.b   (a5,d3.w),d4        ; and with mask
-    move.b  d4,ptmp             ; stash 
+    move.b  d4,.ptmp            ; stash 
     clr.w   d5                  ; line counter
     move.w  #pwidth-1,d5        ; loop counter/bit
 .expb:
     clr.b   d4
-    btst    d5,ptmp             ; test pattern bit
+    btst    d5,.ptmp            ; test pattern bit
     beq     .offb
     move.b  #$7E,d4
 .offb:
@@ -925,6 +913,7 @@ loadpat:
     add.l   #sprwidth*(csize-1),a2  ; next cell line
     dbra    d6,.loadb
     rts
+.ptmp dc.b  0,0
 
 ;-----loadscales()---------
 ; update the scales/leads for the current mode.
@@ -1327,141 +1316,6 @@ handlekb:
 .done:
     rts
 
-    IFD TEST
-;-----nextstate()----------
-; Compute next cell state.
-; uses a0-a2,d0-d6
-    CNOP    0,4
-nextstate:
-    lea     state,a0          ; state address
-    move.l  a0,a1
-    move.w  pos,d0            ; current position 
-    move.w  d0,d6
-    incmod  d6,nstates
-    move.w  d6,pos            ; save new position
-    lsl.w   #stwidthlog,d0
-    lsl.w   #stwidthlog,d6
-    lea     (a0,d0.w),a0      ; current state
-    btst    #G_RAND,flags2 
-    beq     .norand
-    bclr    #G_RAND,flags2
-    jsr     randstate
-    lea     newstate,a0
-    bra     .noinit
-.norand:
-    btst    #G_ONE,flags2
-    beq     .noinit
-    bclr    #G_ONE,flags2
-    jsr     initstate
-    lea     newstate,a0
-.noinit:
-    move.w  rule,d3           ; rule
-    lea     (a1,d6.w),a1      ; next state
-    clr.l   d4                ; shift buffer
-    move.b  stlast(a0),d0     ; s-1
-    lsl.b   #2,d0
-    or.b    d0,d4             ; add to buffer
-    move.b  (a0)+,d0          ; s
-    move.b  d0,d6             ; save first element in d6
-    lsl.b   #1,d0
-    or.b    d0,d4             ; add to buffer
-    move.b  d4,d2             ; previous buffer in d2
-    move.w  #ncells-1,d0      ; loop counter
-.stloop:
-    move.b  (a0)+,d1          ; next
-    or.b    d1,d4 
-    move    d3,d1             ; check rule bit
-    lsr.b   d4,d1
-    and.b   #1,d1
-    move.b  d1,(a1)+          ; store new state
-    move.b  d4,d2             ; previous buffer in d2
-    lsl.b   #1,d4             ; advance bits
-    and.b   #7,d4
-    dbra    d0,.stloop
-    or.b    d6,d4             ; last
-    move    d3,d1             ; check rule bit
-    lsr.b   d4,d1
-    and.b   #1,d1
-    move.b  d1,(a1)           ; store new state
-    move.w  pos,d0
-    jsr     pack
-    rts
-    ENDC
-
-    IFD TEST
-;-----pack()---------------
-; pack state at d0 into packed as dword.
-; uses d0-d2,d6,a6
-    CNOP    0,4
-pack:
-    lea     state,a6          ; compute state address
-    lsl.w   #stwidthlog,d0    
-    move.w  #ncells-1,d6      ; loop counter
-    move.l  #$80000000,d1     ; bit mask
-    clr.l   d2                ; bit buffer
-    clr.b   d3                ; set bit counter
-.loop:
-    cmp.b   #0,(a6,d0.w)      ; test byte
-    beq.b   .next
-    or.l    d1,d2             ; set bit
-    move.b  #$FF,d3           ; set flag
-.next:
-    lsr.l   #1,d1             ; advance mask
-    add.w   #1,d0             ; advance position
-    dbra    d6,.loop
-    lea     buf,a6
-    move.w  bpos,d0           ; write position
-    move.l  d2,(a6,d0.w)
-    add.w   #4,d0             ; advance
-    and.w   #$1F,d0           ; mod 4*window size
-    move.w  d0,bpos
-    add.b   #1,d3             ; count zeros
-    add.b   d3,zeros
-    cmp.b   #countz,zeros     ; test for dead state
-    blt     .norand
-    clr.b   zeros
-    bset    #G_RAND,flags2
-.norand:
-    rts
-    
-;-----drawstate(d0)--------
-; Render the cell state at position in d0
-; to render buffer cbuf.
-; uses a0-a1,d0-d3
-    CNOP    0,4
-drawstate:
-    waitblt
-    lea     state,a0          ; compute state addr
-    lsl.w   #stwidthlog,d0
-    add.l   d0,a0
-    lea     stwidth+cbuf,a1   ; cell ptr
-    move.w  #ncells-1,d0      ; loop counter
-    move.l  #$7E000000,d1     ; bit pattern
-    clr.l   d2                ; current word
-.drawloop:
-    cmp.b   #0,(a0)+          ; test current cell
-    beq     .off 
-    or.l    d1,d2             ; set bit 
-.off: 
-    lsr.l   #csize,d1         ; advance bit
-    bne     .nxt
-    move.l  #$7E000000,d1     ; reset pattern
-    move.l  d2,(a1)+          ; store word
-    clr.l   d2                ; clear current word
-.nxt:
-    dbra    d0,.drawloop
-    move.w  #csize-3,d1       ; outer loop counter
-.copyout:
-    lea     stwidth+cbuf,a0
-    move.w  #stwidthl-1,d0    ; inner loop counter
-.copyloop:
-    move.l  (a0)+,d2          ; copy by dwords
-    move.l  d2,(a1)+
-    dbra    d0,.copyloop
-    dbra    d1,.copyout
-    rts 
-    ENDC
-    
     CNOP    0,4
 copymem:
     waitblt
@@ -1527,7 +1381,7 @@ wavint:
     move.b  (a1)+,d3
     ext.w   d2
     ext.w   d3
-    IFD DOINT
+    IFND NOINT
     lsl.w   d0,d2
     lsl.w   d1,d3
     add.w   d2,d3
@@ -1664,7 +1518,186 @@ playlead:
     dbra    d6,.loop
     rts
 
+;-----modlead()------------
+; updates wavm0/wavm1 by pwm
+modlead:
+    lea     wavm0,a0            ; dest position
+    lea     wav0,a1             ; source
+    lea     modtab,a2           ; modulation
+    lea     ldmp,a3             ; mod position
+    lea     ldmr,a4             ; mod rate
+    move.w  #TABSIZEW,d1
+    or.w    #(4<<6),d1          ; 4 lines
+    move.w  #1,d6               ; loop counter
+    IFD MODONE
+    clr.w d6 ; only mod first
+    ENDC
+.loop:
+    waitblt
+    move.w  #$0D30,_BLTCON0     ; set params (A,B,D), LF AB'
+    clr.w   _BLTAMOD
+    clr.w   _BLTDMOD
+    move.w  #-TABSIZEB,_BLTBMOD
+    move.l  a0,_BLTDPT          ; set dest
+    move.l  a1,_BLTAPT          ; set A
+    move.w  (a3),d3             ; mod position
+    lea     (a2,d3.w),a5        ; B address
+    move.l  a5,_BLTBPT          ; set B           
+    move.w  d1,_BLTSIZE         ; start blit
+    move.w  (a4)+,d4            ; mod rate
+    add.w   d4,d3               ; update mod position
+    and.w   #$7F,d3             ; mod table size
+    move.w  d3,(a3)+
+    add.l   #wavsize,a0         ; update pointers
+    add.l   #wavsize,a1
+    dbra    d6,.loop
+    rts
+
+;-----chroot()----------------
+; update the root note to the new value in d0
+; no effect if same
+    CNOP    0,4
+chroot:
+    move.b  root,d1
+    cmp.b   d0,d1
+    beq     .done
+    move.b  d0,root
+    jsr     loadscales
+.done:
+    rts
+
     IFD TEST
+;-----nextstate()----------
+; Compute next cell state.
+; uses a0-a2,d0-d6
+    CNOP    0,4
+nextstate:
+    lea     state,a0          ; state address
+    move.l  a0,a1
+    move.w  pos,d0            ; current position 
+    move.w  d0,d6
+    incmod  d6,nstates
+    move.w  d6,pos            ; save new position
+    lsl.w   #stwidthlog,d0
+    lsl.w   #stwidthlog,d6
+    lea     (a0,d0.w),a0      ; current state
+    btst    #G_RAND,flags2 
+    beq     .norand
+    bclr    #G_RAND,flags2
+    jsr     randstate
+    lea     newstate,a0
+    bra     .noinit
+.norand:
+    btst    #G_ONE,flags2
+    beq     .noinit
+    bclr    #G_ONE,flags2
+    jsr     initstate
+    lea     newstate,a0
+.noinit:
+    move.w  rule,d3           ; rule
+    lea     (a1,d6.w),a1      ; next state
+    clr.l   d4                ; shift buffer
+    move.b  stlast(a0),d0     ; s-1
+    lsl.b   #2,d0
+    or.b    d0,d4             ; add to buffer
+    move.b  (a0)+,d0          ; s
+    move.b  d0,d6             ; save first element in d6
+    lsl.b   #1,d0
+    or.b    d0,d4             ; add to buffer
+    move.b  d4,d2             ; previous buffer in d2
+    move.w  #ncells-1,d0      ; loop counter
+.stloop:
+    move.b  (a0)+,d1          ; next
+    or.b    d1,d4 
+    move    d3,d1             ; check rule bit
+    lsr.b   d4,d1
+    and.b   #1,d1
+    move.b  d1,(a1)+          ; store new state
+    move.b  d4,d2             ; previous buffer in d2
+    lsl.b   #1,d4             ; advance bits
+    and.b   #7,d4
+    dbra    d0,.stloop
+    or.b    d6,d4             ; last
+    move    d3,d1             ; check rule bit
+    lsr.b   d4,d1
+    and.b   #1,d1
+    move.b  d1,(a1)           ; store new state
+    move.w  pos,d0
+    jsr     pack
+    rts
+
+;-----pack()---------------
+; pack state at d0 into packed as dword.
+; uses d0-d2,d6,a6
+    CNOP    0,4
+pack:
+    lea     state,a6          ; compute state address
+    lsl.w   #stwidthlog,d0    
+    move.w  #ncells-1,d6      ; loop counter
+    move.l  #$80000000,d1     ; bit mask
+    clr.l   d2                ; bit buffer
+    clr.b   d3                ; set bit counter
+.loop:
+    cmp.b   #0,(a6,d0.w)      ; test byte
+    beq.b   .next
+    or.l    d1,d2             ; set bit
+    move.b  #$FF,d3           ; set flag
+.next:
+    lsr.l   #1,d1             ; advance mask
+    add.w   #1,d0             ; advance position
+    dbra    d6,.loop
+    lea     buf,a6
+    move.w  bpos,d0           ; write position
+    move.l  d2,(a6,d0.w)
+    add.w   #4,d0             ; advance
+    and.w   #$1F,d0           ; mod 4*window size
+    move.w  d0,bpos
+    add.b   #1,d3             ; count zeros
+    add.b   d3,zeros
+    cmp.b   #countz,zeros     ; test for dead state
+    blt     .norand
+    clr.b   zeros
+    bset    #G_RAND,flags2
+.norand:
+    rts
+    
+;-----drawstate(d0)--------
+; Render the cell state at position in d0
+; to render buffer cbuf.
+; uses a0-a1,d0-d3
+    CNOP    0,4
+drawstate:
+    waitblt
+    lea     state,a0          ; compute state addr
+    lsl.w   #stwidthlog,d0
+    add.l   d0,a0
+    lea     stwidth+cbuf,a1   ; cell ptr
+    move.w  #ncells-1,d0      ; loop counter
+    move.l  #$7E000000,d1     ; bit pattern
+    clr.l   d2                ; current word
+.drawloop:
+    cmp.b   #0,(a0)+          ; test current cell
+    beq     .off 
+    or.l    d1,d2             ; set bit 
+.off: 
+    lsr.l   #csize,d1         ; advance bit
+    bne     .nxt
+    move.l  #$7E000000,d1     ; reset pattern
+    move.l  d2,(a1)+          ; store word
+    clr.l   d2                ; clear current word
+.nxt:
+    dbra    d0,.drawloop
+    move.w  #csize-3,d1       ; outer loop counter
+.copyout:
+    lea     stwidth+cbuf,a0
+    move.w  #stwidthl-1,d0    ; inner loop counter
+.copyloop:
+    move.l  (a0)+,d2          ; copy by dwords
+    move.l  d2,(a1)+
+    dbra    d0,.copyloop
+    dbra    d1,.copyout
+    rts 
+    
 ;-----seed()---------------
 ; Seed the prng
 ; uses d0-d2
@@ -1721,54 +1754,6 @@ initstate:
     move.b  #1,newstate+16
     rts
     ENDC
-
-;-----modlead()------------
-; updates wavm0/wavm1 by pwm
-modlead:
-    lea     wavm0,a0            ; dest position
-    lea     wav0,a1             ; source
-    lea     modtab,a2           ; modulation
-    lea     ldmp,a3             ; mod position
-    lea     ldmr,a4             ; mod rate
-    move.w  #TABSIZEW,d1
-    or.w    #(4<<6),d1          ; 4 lines
-    move.w  #1,d6               ; loop counter
-    IFD MODONE
-    clr.w d6 ; only mod first
-    ENDC
-.loop:
-    waitblt
-    move.w  #$0D30,_BLTCON0     ; set params (A,B,D), LF AB'
-    clr.w   _BLTAMOD
-    clr.w   _BLTDMOD
-    move.w  #-TABSIZEB,_BLTBMOD
-    move.l  a0,_BLTDPT          ; set dest
-    move.l  a1,_BLTAPT          ; set A
-    move.w  (a3),d3             ; mod position
-    lea     (a2,d3.w),a5        ; B address
-    move.l  a5,_BLTBPT          ; set B           
-    move.w  d1,_BLTSIZE         ; start blit
-    move.w  (a4)+,d4            ; mod rate
-    add.w   d4,d3               ; update mod position
-    and.w   #$7F,d3             ; mod table size
-    move.w  d3,(a3)+
-    add.l   #wavsize,a0         ; update pointers
-    add.l   #wavsize,a1
-    dbra    d6,.loop
-    rts
-
-;-----chroot()----------------
-; update the root note to the new value in d0
-; no effect if same
-    CNOP    0,4
-chroot:
-    move.b  root,d1
-    cmp.b   d0,d1
-    beq     .done
-    move.b  d0,root
-    jsr     loadscales
-.done:
-    rts
 
 ;------------------------------------------------------------------------------
     end
